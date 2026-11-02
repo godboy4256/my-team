@@ -1,0 +1,92 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand-50: #edf6ef;
+  --color-brand-100: #dceee0;
+  --color-brand-200: #bfdfc8;
+  --color-brand-500: #389367;
+  --color-brand-600: #277d55;
+  --color-brand-700: #1c704c;
+  --color-brand-800: #16583d;
+  --color-brand-900: #124832;
+
+  --color-accent-50: #fff7e9;
+  --color-accent-100: #ffedc7;
+  --color-accent-500: #d99a2b;
+  --color-accent-700: #9b6410;
+
+  --color-ink: #17231d;
+  --color-ink-muted: #526258;
+  --color-ink-faint: #78867d;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f4f7f3;
+  --color-canvas: #f5f7f4;
+  --color-line: #dce5dc;
+  --color-danger: #b83f3f;
+  --color-success: #277d55;
+
+  --font-sans:
+    Inter, Pretendard, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.1875rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.125rem;
+  --text-4xl: 2.75rem;
+  --text-5xl: 3.5rem;
+
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+  --breakpoint-2xl: 96rem;
+
+  --shadow-card: 0 12px 32px -24px rgb(23 53 34 / 28%);
+}
+
+:root {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+  font-size: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  color: var(--color-brand-900);
+  background: var(--color-brand-100);
+}
