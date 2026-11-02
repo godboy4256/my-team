@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Card, PageContainer, TextInput } from './components';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+import { Button, TextInput } from './components';
 import {
   createLineups,
   demoPlayers,
   formations,
+  getFormationPlayerCoordinates,
   positions,
 } from './features/lineup/lineup';
 import type {
@@ -15,12 +17,31 @@ import type {
 } from './features/lineup/lineup';
 
 const STORAGE_KEY = 'my-team-lineup-v1';
+const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
+const FORMATION_ID = '4-3-3';
+
+function createInitialLineups(
+  players: Player[],
+  isVerticalPitch = true,
+): QuarterLineup[] {
+  return createLineups({
+    players,
+    quarterCount: 4,
+    mode: 'same',
+    formationId: FORMATION_ID,
+    minimumQuarters: 2,
+    isVerticalPitch,
+  });
+}
 
 type StoredState = {
   players: Player[];
   selectedPlayerIds: string[];
   isSampleData: boolean;
 };
+
+type SetupStep = 1 | 2 | 3;
+type MatchMode = 'scrimmage' | 'match';
 
 function readStoredState(): StoredState {
   try {
@@ -64,15 +85,6 @@ function readStoredState(): StoredState {
   };
 }
 
-function getLineGroup(position: Position): number {
-  if (position === 'GK') return 0;
-  if (['센터백', '사이드백'].includes(position)) return 1;
-  if (['수비형 미드필더', '미드필더', '공격형 미드필더'].includes(position)) {
-    return 2;
-  }
-  return 3;
-}
-
 function App() {
   const initialState = useMemo(readStoredState, []);
   const [players, setPlayers] = useState<Player[]>(initialState.players);
@@ -81,31 +93,62 @@ function App() {
     initialState.selectedPlayerIds,
   );
   const [quarterCount, setQuarterCount] = useState(4);
+  const [quarterCountInput, setQuarterCountInput] = useState('4');
   const [minimumQuarters, setMinimumQuarters] = useState(2);
+  const [minimumQuartersInput, setMinimumQuartersInput] = useState('2');
   const [formationMode, setFormationMode] = useState<FormationMode>('same');
   const [formationId, setFormationId] = useState('4-3-3');
+  const [matchMode, setMatchMode] = useState<MatchMode>('scrimmage');
   const [lineups, setLineups] = useState<QuarterLineup[]>(() => {
+    try {
+      const stored = localStorage.getItem(LINEUP_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed as QuarterLineup[];
+        }
+      }
+    } catch {
+      // 오래되었거나 깨진 전술보드는 새 초기 배치로 교체합니다.
+    }
+
     const attendees = initialState.players.filter(({ id }) =>
       initialState.selectedPlayerIds.includes(id),
     );
 
     return attendees.length
-      ? createLineups({
-          players: attendees,
-          quarterCount: 4,
-          mode: 'same',
-          formationId: '4-3-3',
-          minimumQuarters: 2,
-        })
+      ? createInitialLineups(
+          attendees,
+          window.matchMedia('(max-width: 47.999rem)').matches,
+        )
       : [];
   });
   const [activeQuarter, setActiveQuarter] = useState(0);
+  const [isSetupOpen, setIsSetupOpen] = useState(false);
+  const [setupStep, setSetupStep] = useState<SetupStep>(1);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isAddingPlayer, setIsAddingPlayer] = useState(false);
+  const [playerFormSource, setPlayerFormSource] = useState<
+    'menu' | 'attendees'
+  >('menu');
+  const [attendeeSearch, setAttendeeSearch] = useState('');
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerAge, setNewPlayerAge] = useState('');
   const [newPlayerPositions, setNewPlayerPositions] = useState<Position[]>([]);
   const [newPlayerType, setNewPlayerType] = useState<Player['type']>('member');
   const [notice, setNotice] = useState('');
+  const [isVerticalPitch, setIsVerticalPitch] = useState(
+    () => window.matchMedia('(max-width: 47.999rem)').matches,
+  );
+  const pitchRef = useRef<HTMLDivElement>(null);
+  const dragPlayerId = useRef<string | null>(null);
+  const dragOffset = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const previousPitchOrientation = useRef(isVerticalPitch);
+  const [dragPosition, setDragPosition] = useState<{
+    playerId: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   const selectedPlayers = useMemo(
     () => players.filter(({ id }) => selectedPlayerIds.includes(id)),
@@ -115,11 +158,42 @@ function App() {
   const activeFormation = formations.find(
     ({ id }) => id === activeLineup?.formationId,
   );
-  const availablePlayers = selectedPlayers.length;
-  const requiredPlayerCount = Math.min(11, availablePlayers);
-  const totalQuarterSlots = requiredPlayerCount * quarterCount;
-  const requestedMinimumSlots = minimumQuarters * availablePlayers;
-  const canMeetMinimum = requestedMinimumSlots <= totalQuarterSlots;
+  const requiredPlayerCount = Math.min(11, selectedPlayers.length);
+  const maximumFeasibleMinimum = Math.min(
+    quarterCount,
+    selectedPlayers.length === 0
+      ? 0
+      : Math.floor(
+          (requiredPlayerCount * quarterCount) / selectedPlayers.length,
+        ),
+  );
+  useEffect(() => {
+    const nextMinimum = Math.min(minimumQuarters, maximumFeasibleMinimum);
+
+    if (nextMinimum !== minimumQuarters) {
+      setMinimumQuarters(nextMinimum);
+      setMinimumQuartersInput(String(nextMinimum));
+    }
+  }, [maximumFeasibleMinimum, minimumQuarters]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 47.999rem)');
+    const updatePitchOrientation = () => {
+      const nextOrientation = mediaQuery.matches;
+
+      if (previousPitchOrientation.current === nextOrientation) return;
+
+      previousPitchOrientation.current = nextOrientation;
+      setIsVerticalPitch(nextOrientation);
+      setDragPosition(null);
+    };
+
+    updatePitchOrientation();
+    mediaQuery.addEventListener('change', updatePitchOrientation);
+
+    return () =>
+      mediaQuery.removeEventListener('change', updatePitchOrientation);
+  }, []);
 
   useEffect(() => {
     try {
@@ -135,9 +209,81 @@ function App() {
   }, [players, selectedPlayerIds, isSampleData]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(LINEUP_STORAGE_KEY, JSON.stringify(lineups));
+    } catch {
+      setNotice('전술판 위치를 저장하지 못했습니다.');
+    }
+  }, [lineups]);
+
+  function toggleAttendance(playerId: string) {
+    setSelectedPlayerIds((current) =>
+      current.includes(playerId)
+        ? current.filter((id) => id !== playerId)
+        : [...current, playerId],
+    );
+  }
+
+  function toggleAllAttendance() {
+    setSelectedPlayerIds(
+      selectedPlayerIds.length === players.length
+        ? []
+        : players.map(({ id }) => id),
+    );
+  }
+
+  function updateQuarterCount(value: string) {
+    setQuarterCountInput(value);
+    if (!value) return;
+
+    const nextCount = Number(value);
+    if (!Number.isInteger(nextCount) || nextCount < 1 || nextCount > 12) {
+      return;
+    }
+
+    setQuarterCount(nextCount);
+    const maximumMinimum =
+      selectedPlayers.length === 0
+        ? 0
+        : Math.min(
+            nextCount,
+            Math.floor(
+              (Math.min(11, selectedPlayers.length) * nextCount) /
+                selectedPlayers.length,
+            ),
+          );
+    const nextMinimum = Math.min(minimumQuarters, maximumMinimum);
+
+    if (nextMinimum !== minimumQuarters) {
+      setMinimumQuarters(nextMinimum);
+      setMinimumQuartersInput(String(nextMinimum));
+    }
+  }
+
+  function updateMinimumQuarters(value: string) {
+    setMinimumQuartersInput(value);
+    if (!value) return;
+
+    const nextMinimum = Number(value);
+    if (!Number.isInteger(nextMinimum) || nextMinimum < 0) return;
+
+    const validatedMinimum = Math.min(nextMinimum, maximumFeasibleMinimum);
+    setMinimumQuarters(validatedMinimum);
+    setMinimumQuartersInput(String(validatedMinimum));
+  }
+
+  function generateLineups() {
     if (selectedPlayers.length === 0) {
-      setLineups([]);
-      setActiveQuarter(0);
+      setNotice('오늘 경기 참석 선수를 한 명 이상 선택해 주세요.');
+      setSetupStep(1);
+      return;
+    }
+
+    if (minimumQuarters > maximumFeasibleMinimum) {
+      setNotice(
+        `현재 인원과 쿼터 수에서 선수당 최소 ${maximumFeasibleMinimum}쿼터까지 보장할 수 있습니다.`,
+      );
+      setSetupStep(3);
       return;
     }
 
@@ -148,45 +294,14 @@ function App() {
         mode: formationMode,
         formationId,
         minimumQuarters,
+        isVerticalPitch,
       }),
     );
     setActiveQuarter(0);
-  }, [
-    selectedPlayers,
-    quarterCount,
-    formationMode,
-    formationId,
-    minimumQuarters,
-  ]);
-
-  function toggleAttendance(playerId: string) {
-    setSelectedPlayerIds((current) =>
-      current.includes(playerId)
-        ? current.filter((id) => id !== playerId)
-        : [...current, playerId],
-    );
-  }
-
-  function generateLineups() {
-    if (selectedPlayers.length === 0) {
-      setNotice('먼저 오늘 경기 참석 선수를 선택해 주세요.');
-      return;
-    }
-
-    const generated = createLineups({
-      players: selectedPlayers,
-      quarterCount,
-      mode: formationMode,
-      formationId,
-      minimumQuarters,
-    });
-
-    setLineups(generated);
-    setActiveQuarter(0);
+    setIsSetupOpen(false);
+    setSetupStep(1);
     setNotice(
-      canMeetMinimum
-        ? ''
-        : '현재 인원과 쿼터 수로는 최소 출전 횟수를 모두 보장할 수 없습니다.',
+      `${selectedPlayers.length}명 참석 · ${quarterCount}쿼터 라인업을 만들었습니다.`,
     );
   }
 
@@ -212,11 +327,15 @@ function App() {
       preferredPositions: newPlayerPositions,
       type: newPlayerType,
     };
+    const shouldReplaceSampleRoster =
+      isSampleData && playerFormSource === 'menu';
 
-    setPlayers((current) => (isSampleData ? [player] : [...current, player]));
-    setIsSampleData(false);
+    setPlayers((current) =>
+      shouldReplaceSampleRoster ? [player] : [...current, player],
+    );
+    setIsSampleData(shouldReplaceSampleRoster ? false : isSampleData);
     setSelectedPlayerIds((current) =>
-      isSampleData ? [player.id] : [...current, player.id],
+      shouldReplaceSampleRoster ? [player.id] : [...current, player.id],
     );
     setNewPlayerName('');
     setNewPlayerAge('');
@@ -242,140 +361,669 @@ function App() {
     });
   }
 
-  function changeQuarterPlayer(
-    quarterIndex: number,
-    slotIndex: number,
+  function getPlayerCoordinates(clientX: number, clientY: number) {
+    const pitch = pitchRef.current;
+    if (!pitch) return null;
+
+    const bounds = pitch.getBoundingClientRect();
+    const localX =
+      clientX -
+      bounds.left -
+      dragOffset.current.x +
+      dragOffset.current.width / 2;
+    const localY =
+      clientY -
+      bounds.top -
+      dragOffset.current.y +
+      dragOffset.current.height / 2;
+    const markerHalfWidth = (dragOffset.current.width / 2 / bounds.width) * 100;
+    const markerHalfHeight =
+      (dragOffset.current.height / 2 / bounds.height) * 100;
+    const x = Math.min(
+      100 - markerHalfWidth,
+      Math.max(markerHalfWidth, (localX / bounds.width) * 100),
+    );
+    const y = Math.min(
+      100 - markerHalfHeight,
+      Math.max(markerHalfHeight, (localY / bounds.height) * 100),
+    );
+
+    return { x, y };
+  }
+
+  function endDrag() {
+    dragPlayerId.current = null;
+  }
+
+  function savePlayerPosition(
     playerId: string,
+    coordinates: { x: number; y: number },
   ) {
     setLineups((current) =>
       current.map((quarter, index) => {
-        if (index !== quarterIndex) return quarter;
+        if (index !== activeQuarter) return quarter;
 
         return {
           ...quarter,
-          slots: quarter.slots.map((slot, currentSlotIndex) =>
-            currentSlotIndex === slotIndex
-              ? { ...slot, playerId: playerId || null }
-              : slot,
+          slots: quarter.slots.map((slot) =>
+            slot.playerId === playerId ? { ...slot, ...coordinates } : slot,
           ),
         };
       }),
     );
   }
 
-  const groupedSlots = useMemo(() => {
-    if (!activeLineup) return [];
+  function handlePlayerPointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    playerId: string,
+    x: number,
+    y: number,
+  ) {
+    const markerBounds = event.currentTarget.getBoundingClientRect();
+    dragPlayerId.current = playerId;
+    dragOffset.current = {
+      x: event.clientX - markerBounds.left,
+      y: event.clientY - markerBounds.top,
+      width: markerBounds.width,
+      height: markerBounds.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.currentTarget.classList.add('is-dragging');
+    setDragPosition({ playerId, x, y });
+  }
 
-    return [0, 1, 2, 3].map((group) =>
-      activeLineup.slots
-        .map((slot, index) => ({ ...slot, index }))
-        .filter(({ position }) => getLineGroup(position) === group),
-    );
-  }, [activeLineup]);
+  function handlePlayerPointerMove(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    playerId: string,
+  ) {
+    if (dragPlayerId.current !== playerId) return;
+
+    const coordinates = getPlayerCoordinates(event.clientX, event.clientY);
+    if (!coordinates) return;
+
+    setDragPosition({ playerId, ...coordinates });
+    savePlayerPosition(playerId, coordinates);
+  }
+
+  function handlePlayerPointerUp(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    playerId: string,
+  ) {
+    if (dragPlayerId.current !== playerId) return;
+
+    const coordinates = getPlayerCoordinates(event.clientX, event.clientY);
+    if (coordinates) {
+      savePlayerPosition(playerId, coordinates);
+    }
+    event.currentTarget.classList.remove('is-dragging');
+    setDragPosition(null);
+    endDrag();
+  }
 
   return (
-    <main className="min-h-screen bg-canvas text-ink">
-      <PageContainer className="pb-10">
-        <header className="flex items-center justify-between border-b border-line py-4 sm:py-5">
-          <a
-            className="flex items-center gap-3"
-            href="/"
-            aria-label="마이팀 홈"
-          >
-            <span className="grid size-10 place-items-center rounded-xl bg-brand-700 text-lg font-black text-white">
-              M
-            </span>
-            <span>
-              <span className="block text-base font-extrabold leading-tight">
-                마이팀
-              </span>
-              <span className="text-xs font-medium text-ink-faint">
-                FC 우리동네
-              </span>
-            </span>
-          </a>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <span className="hidden rounded-full bg-brand-50 px-3 py-1.5 text-sm font-bold text-brand-800 sm:inline-flex">
-              경기 운영
-            </span>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setIsAddingPlayer((current) => !current)}
-            >
-              <span aria-hidden="true">＋</span>
-              <span className="hidden sm:inline">선수 등록</span>
-              <span className="sm:hidden">등록</span>
-            </Button>
-          </div>
-        </header>
-
-        <section className="flex flex-col justify-between gap-3 py-5 sm:flex-row sm:items-center sm:py-6">
-          <div>
-            <p className="text-xs font-bold text-brand-700">
-              FC 우리동네 · 오늘 경기
-            </p>
-            <div className="mt-0.5 flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
-                쿼터별 라인업
-              </h1>
-              {isSampleData && (
-                <span className="rounded-full bg-accent-100 px-2.5 py-1 text-xs font-bold text-accent-700">
-                  예시 명단
-                </span>
-              )}
+    <main className="app-shell bg-canvas text-ink">
+      <header className="app-header flex items-center justify-between border-b border-line bg-surface px-3 sm:px-5">
+        <a className="flex items-center gap-2" href="/" aria-label="마이팀 홈">
+          <span className="grid size-8 place-items-center rounded-lg bg-brand-700 text-sm font-black text-white">
+            M
+          </span>
+          <span className="text-base font-extrabold leading-none">마이팀</span>
+        </a>
+        <button
+          type="button"
+          className="grid size-11 place-items-center rounded-xl text-3xl leading-none text-ink hover:bg-surface-subtle"
+          aria-label="메뉴 열기"
+          aria-expanded={isMenuOpen}
+          onClick={() => setIsMenuOpen((current) => !current)}
+        >
+          <span className="menu-icon" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+        </button>
+        {isMenuOpen && (
+          <div className="menu-popover absolute right-3 top-14 z-30 w-52 rounded-2xl border border-line bg-surface p-2 shadow-card">
+            <div className="px-3 py-2 text-xs font-bold text-ink-faint">
+              팀 관리
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2 text-sm">
-            <span className="rounded-lg border border-line bg-surface px-3 py-2 font-semibold text-ink-muted">
-              참석{' '}
-              <strong className="ml-1 text-brand-700">
-                {availablePlayers}명
-              </strong>
-            </span>
-            <span className="rounded-lg border border-line bg-surface px-3 py-2 font-semibold text-ink-muted">
-              {quarterCount}쿼터 · {activeFormation?.label ?? formationId}
-            </span>
-          </div>
-        </section>
-
-        {notice && (
-          <div
-            role="status"
-            className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm font-medium text-brand-900"
-          >
-            <span>{notice}</span>
             <button
               type="button"
-              className="shrink-0 font-bold"
-              aria-label="알림 닫기"
-              onClick={() => setNotice('')}
+              className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold hover:bg-surface-subtle"
+              onClick={() => {
+                setPlayerFormSource('menu');
+                setNewPlayerType('member');
+                setIsAddingPlayer(true);
+                setIsMenuOpen(false);
+              }}
             >
-              닫기
+              선수 등록
             </button>
+            <button
+              type="button"
+              className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold hover:bg-surface-subtle"
+              onClick={() => {
+                setIsSetupOpen(true);
+                setSetupStep(1);
+                setIsMenuOpen(false);
+              }}
+            >
+              오늘 경기 참석자
+            </button>
+            {isSampleData && (
+              <button
+                type="button"
+                className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-danger hover:bg-surface-subtle"
+                onClick={() => {
+                  setPlayers([]);
+                  setSelectedPlayerIds([]);
+                  setLineups([]);
+                  setIsSampleData(false);
+                  setIsMenuOpen(false);
+                  setNotice(
+                    '예시 명단을 비웠습니다. 메뉴에서 선수를 등록해 주세요.',
+                  );
+                }}
+              >
+                예시 명단 비우기
+              </button>
+            )}
           </div>
         )}
+      </header>
 
-        {isAddingPlayer && (
-          <Card className="mb-6">
-            <div className="mb-5 flex items-start justify-between gap-4">
+      {notice && (
+        <div
+          role="status"
+          className="notice-bar flex items-center justify-between gap-3 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-900"
+        >
+          <span>{notice}</span>
+          <button
+            type="button"
+            className="shrink-0 font-bold"
+            aria-label="알림 닫기"
+            onClick={() => setNotice('')}
+          >
+            닫기
+          </button>
+        </div>
+      )}
+
+      <section className="board-area" aria-label="전술 보드">
+        <div className="board-meta flex items-center justify-between px-3 py-2 text-xs font-bold text-ink-muted">
+          <span>
+            {activeQuarter + 1}쿼터 · {activeFormation?.label ?? formationId}
+          </span>
+          <span>{selectedPlayers.length}명 참석</span>
+        </div>
+
+        <div ref={pitchRef} className="pitch">
+          <div className="pitch-line pitch-border" />
+          <div className="pitch-line pitch-halfway" />
+          <div className="pitch-line pitch-center-circle" />
+          <div className="pitch-line pitch-center-dot" />
+          <div className="pitch-line pitch-box pitch-box-top" />
+          <div className="pitch-line pitch-box pitch-box-bottom" />
+
+          {activeLineup ? (
+            <div className="player-layer">
+              {activeLineup.slots.map((slot, slotIndex) => {
+                const currentPlayer = selectedPlayers.find(
+                  ({ id }) => id === slot.playerId,
+                );
+                if (!currentPlayer) return null;
+
+                const initialCoordinates =
+                  Number.isFinite(slot.x) && Number.isFinite(slot.y)
+                    ? { x: slot.x, y: slot.y }
+                    : getFormationPlayerCoordinates(
+                        activeFormation ?? formations[0]!,
+                        slot.position,
+                        slotIndex,
+                        isVerticalPitch,
+                      );
+                const displayCoordinates =
+                  dragPosition?.playerId === currentPlayer.id
+                    ? dragPosition
+                    : initialCoordinates;
+
+                return (
+                  <button
+                    key={`${currentPlayer.id}-${slotIndex}`}
+                    type="button"
+                    className="player-marker"
+                    aria-label={`${currentPlayer.name}, 전술 보드에서 드래그해 위치 이동`}
+                    style={{
+                      left: `${displayCoordinates.x}%`,
+                      top: `${displayCoordinates.y}%`,
+                    }}
+                    onPointerDown={(event) =>
+                      handlePlayerPointerDown(
+                        event,
+                        currentPlayer.id,
+                        displayCoordinates.x,
+                        displayCoordinates.y,
+                      )
+                    }
+                    onPointerMove={(event) =>
+                      handlePlayerPointerMove(event, currentPlayer.id)
+                    }
+                    onPointerUp={(event) =>
+                      handlePlayerPointerUp(event, currentPlayer.id)
+                    }
+                    onPointerCancel={(event) =>
+                      handlePlayerPointerUp(event, currentPlayer.id)
+                    }
+                    onLostPointerCapture={(event) => {
+                      if (dragPlayerId.current === currentPlayer.id) {
+                        handlePlayerPointerUp(event, currentPlayer.id);
+                      }
+                    }}
+                  >
+                    <span className="player-name">{currentPlayer.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="board-empty">
+              <span className="text-3xl" aria-hidden="true">
+                ⚽
+              </span>
+              <p className="mt-2 text-base font-extrabold">전술 보드</p>
+              <p className="mt-1 text-xs text-white/80">
+                하단 버튼을 눌러 오늘 라인업을 구성하세요.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {lineups.length > 0 && (
+          <div className="quarter-tabs flex gap-2 overflow-x-auto px-3 py-2">
+            {lineups.map((quarter, index) => (
+              <button
+                key={`${quarter.formationId}-${index}`}
+                type="button"
+                aria-pressed={activeQuarter === index}
+                onClick={() => setActiveQuarter(index)}
+                className={`min-h-9 shrink-0 rounded-lg px-4 text-sm font-bold ${activeQuarter === index ? 'bg-brand-700 text-white' : 'bg-surface-subtle text-ink-muted'}`}
+              >
+                {index + 1}쿼터
+              </button>
+            ))}
+            <span className="ml-auto self-center whitespace-nowrap text-xs font-bold text-ink-muted">
+              {activeFormation?.label ?? formationId}
+            </span>
+          </div>
+        )}
+      </section>
+
+      <footer className="app-footer border-t border-line bg-surface px-3 py-2.5">
+        <Button
+          className="w-full"
+          size="md"
+          onClick={() => {
+            setIsSetupOpen(true);
+            setSetupStep(1);
+            setNotice('');
+          }}
+        >
+          <span aria-hidden="true">✦</span>
+          오늘의 라인업 분배
+        </Button>
+      </footer>
+
+      {isSetupOpen && (
+        <div className="sheet-backdrop" role="presentation">
+          <section
+            className="setup-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="setup-title"
+          >
+            <div className="sheet-handle" />
+            <div className="flex items-start justify-between gap-3 px-4 pb-3">
               <div>
-                <p className="text-sm font-bold text-brand-700">팀 관리</p>
-                <h2 className="mt-1 text-xl font-extrabold">선수 등록</h2>
-                <p className="mt-1 text-sm text-ink-muted">
-                  스탯 입력란은 세부 항목이 정해진 뒤 추가할게요.
+                <p className="text-xs font-bold text-brand-700">
+                  {setupStep} / 3 단계
                 </p>
+                <h2 id="setup-title" className="mt-0.5 text-lg font-extrabold">
+                  {setupStep === 1
+                    ? '오늘 참석자'
+                    : setupStep === 2
+                      ? '경기 방식'
+                      : '라인업 설정'}
+                </h2>
               </div>
               <button
                 type="button"
-                className="rounded-lg px-3 py-2 text-sm font-bold text-ink-muted hover:bg-surface-subtle"
-                onClick={() => setIsAddingPlayer(false)}
+                className="grid size-9 place-items-center rounded-full text-lg text-ink-muted hover:bg-surface-subtle"
+                aria-label="설정 닫기"
+                onClick={() => setIsSetupOpen(false)}
               >
-                닫기
+                ×
               </button>
             </div>
-            <form onSubmit={addPlayer} className="grid gap-5">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_160px_220px]">
+
+            <div className="sheet-content">
+              {setupStep === 1 && (
+                <div className="grid gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-ink-muted">
+                      참석 선수 선택
+                    </span>
+                    <button
+                      type="button"
+                      className="text-sm font-bold text-brand-700"
+                      onClick={toggleAllAttendance}
+                    >
+                      {selectedPlayerIds.length === players.length
+                        ? '전체 해제'
+                        : '전체 선택'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                    <TextInput
+                      label="참석 선수 검색"
+                      name="attendeeSearch"
+                      type="search"
+                      value={attendeeSearch}
+                      onChange={(event) =>
+                        setAttendeeSearch(event.target.value)
+                      }
+                      placeholder="이름으로 찾기"
+                    />
+                    <button
+                      type="button"
+                      className="min-h-12 whitespace-nowrap rounded-xl bg-brand-50 px-3 text-sm font-bold text-brand-800"
+                      onClick={() => {
+                        setPlayerFormSource('attendees');
+                        setNewPlayerType('guest');
+                        setIsAddingPlayer(true);
+                      }}
+                    >
+                      + 용병 추가
+                    </button>
+                  </div>
+                  {players.length === 0 ? (
+                    <div className="rounded-2xl bg-surface-subtle p-5 text-center">
+                      <p className="text-sm font-bold">
+                        등록된 선수가 없습니다.
+                      </p>
+                      <button
+                        type="button"
+                        className="mt-2 text-sm font-bold text-brand-700 underline"
+                        onClick={() => {
+                          setIsSetupOpen(false);
+                          setPlayerFormSource('attendees');
+                          setNewPlayerType('guest');
+                          setIsAddingPlayer(true);
+                        }}
+                      >
+                        선수 등록하기
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="attendee-list divide-y divide-line overflow-y-auto rounded-2xl border border-line">
+                      {players
+                        .filter(({ name }) =>
+                          name
+                            .toLocaleLowerCase('ko-KR')
+                            .includes(
+                              attendeeSearch.trim().toLocaleLowerCase('ko-KR'),
+                            ),
+                        )
+                        .map((player) => {
+                          const checked = selectedPlayerIds.includes(player.id);
+
+                          return (
+                            <label
+                              key={player.id}
+                              className={`flex min-h-14 cursor-pointer items-center gap-3 px-3 py-2 ${checked ? '' : 'opacity-55'}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleAttendance(player.id)}
+                                className="size-5 accent-brand-700"
+                              />
+                              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand-100 text-sm font-extrabold text-brand-800">
+                                {player.name.slice(0, 1)}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-bold">
+                                  {player.name}
+                                  <span className="ml-1 font-medium text-ink-faint">
+                                    {player.age}세
+                                  </span>
+                                </span>
+                                <span className="block truncate text-xs text-ink-muted">
+                                  {player.preferredPositions.join(' · ')}
+                                </span>
+                              </span>
+                              <span className="text-xs font-semibold text-ink-faint">
+                                {player.type === 'guest' ? '용병' : '회원'}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      {players.every(
+                        ({ name }) =>
+                          !name
+                            .toLocaleLowerCase('ko-KR')
+                            .includes(
+                              attendeeSearch.trim().toLocaleLowerCase('ko-KR'),
+                            ),
+                      ) && (
+                        <p className="px-3 py-6 text-center text-sm text-ink-muted">
+                          검색 결과가 없습니다.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {isSampleData && players.length > 0 && (
+                    <p className="text-xs text-ink-faint">
+                      예시 명단입니다. 상단 메뉴에서 비우고 팀원을 등록할 수
+                      있어요.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {setupStep === 2 && (
+                <div className="grid gap-3">
+                  <p className="text-sm font-bold text-ink-muted">
+                    오늘 경기 형태를 선택하세요.
+                  </p>
+                  {(
+                    [
+                      ['scrimmage', '자체전', '참석자를 두 팀으로 나눠 진행'],
+                      ['match', '매치전', '우리 팀 한 팀의 포지션을 구성'],
+                    ] as const
+                  ).map(([mode, title, description]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={matchMode === mode}
+                      onClick={() => setMatchMode(mode)}
+                      className={`rounded-2xl border p-4 text-left ${matchMode === mode ? 'border-brand-700 bg-brand-50 ring-1 ring-brand-700' : 'border-line bg-surface'}`}
+                    >
+                      <span className="block text-base font-extrabold">
+                        {title}
+                      </span>
+                      <span className="mt-1 block text-sm text-ink-muted">
+                        {description}
+                      </span>
+                    </button>
+                  ))}
+                  {matchMode === 'scrimmage' && (
+                    <p className="rounded-xl bg-accent-50 px-3 py-2 text-xs font-medium text-accent-700">
+                      자체전 팀 나누기는 다음 단계에서 이어서 지원할 예정입니다.
+                      현재는 한 팀 전술 보드를 구성합니다.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {setupStep === 3 && (
+                <div className="grid gap-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <TextInput
+                      label="총 쿼터 수"
+                      name="quarterCount"
+                      type="number"
+                      min={1}
+                      max={12}
+                      step={1}
+                      value={quarterCountInput}
+                      onChange={(event) =>
+                        updateQuarterCount(event.target.value)
+                      }
+                      onBlur={() => {
+                        const count = Number(quarterCountInput);
+                        if (
+                          !Number.isInteger(count) ||
+                          count < 1 ||
+                          count > 12
+                        ) {
+                          setQuarterCountInput(String(quarterCount));
+                        }
+                      }}
+                      required
+                    />
+                    <TextInput
+                      label="선수별 최소 출전"
+                      name="minimumQuarters"
+                      type="number"
+                      min={0}
+                      max={maximumFeasibleMinimum}
+                      step={1}
+                      value={minimumQuartersInput}
+                      onChange={(event) =>
+                        updateMinimumQuarters(event.target.value)
+                      }
+                      onBlur={() => {
+                        const count = Number(minimumQuartersInput);
+                        if (
+                          !Number.isInteger(count) ||
+                          count < 0 ||
+                          count > maximumFeasibleMinimum
+                        ) {
+                          setMinimumQuartersInput(String(minimumQuarters));
+                        }
+                      }}
+                      required
+                    />
+                  </div>
+                  <p className="text-xs text-ink-muted">
+                    {selectedPlayers.length}명 참석 · 선수별 최소 출전은 0~
+                    {maximumFeasibleMinimum}쿼터까지 설정할 수 있습니다.
+                  </p>
+
+                  <fieldset className="grid gap-2">
+                    <legend className="text-sm font-bold">포메이션 방식</legend>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          ['same', '동일'],
+                          ['different', '쿼터별'],
+                          ['recommended', '추천'],
+                        ] as const
+                      ).map(([mode, title]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          aria-pressed={formationMode === mode}
+                          onClick={() => setFormationMode(mode)}
+                          className={`min-h-10 rounded-xl border px-2 text-xs font-bold ${formationMode === mode ? 'border-brand-700 bg-brand-50 text-brand-800' : 'border-line bg-surface text-ink-muted'}`}
+                        >
+                          {title}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+
+                  {formationMode !== 'recommended' && (
+                    <label className="grid gap-1.5 text-sm font-bold">
+                      {formationMode === 'same'
+                        ? '모든 쿼터 포메이션'
+                        : '시작 포메이션 (쿼터마다 순환)'}
+                      <select
+                        value={formationId}
+                        onChange={(event) => setFormationId(event.target.value)}
+                        className="min-h-11 rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                      >
+                        {formations.map((formation) => (
+                          <option key={formation.id} value={formation.id}>
+                            {formation.label} · {formation.description}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+
+                  <p className="rounded-xl bg-surface-subtle px-3 py-2 text-xs text-ink-muted">
+                    {selectedPlayers.length}명 참석 · {quarterCount}쿼터 ·{' '}
+                    {selectedPlayers.length === 0
+                      ? '참석자를 먼저 선택해 주세요.'
+                      : `최소 ${minimumQuarters}쿼터를 선수당 보장하도록 배치합니다.`}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="sheet-actions flex gap-2 border-t border-line px-4 pt-3">
+              {setupStep > 1 && (
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setSetupStep((setupStep - 1) as SetupStep)}
+                >
+                  이전
+                </Button>
+              )}
+              {setupStep < 3 ? (
+                <Button
+                  className="flex-1"
+                  disabled={setupStep === 1 && selectedPlayers.length === 0}
+                  onClick={() => setSetupStep((setupStep + 1) as SetupStep)}
+                >
+                  다음
+                </Button>
+              ) : (
+                <Button className="flex-1" onClick={generateLineups}>
+                  포메이션 배치
+                </Button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isAddingPlayer && (
+        <div className="sheet-backdrop" role="presentation">
+          <section
+            className="setup-sheet player-form-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="player-form-title"
+          >
+            <div className="sheet-handle" />
+            <div className="flex items-center justify-between px-4 pb-3">
+              <h2 id="player-form-title" className="text-lg font-extrabold">
+                {playerFormSource === 'attendees' ? '용병 추가' : '선수 등록'}
+              </h2>
+              <button
+                type="button"
+                className="grid size-9 place-items-center rounded-full text-lg text-ink-muted hover:bg-surface-subtle"
+                aria-label="등록 닫기"
+                onClick={() => setIsAddingPlayer(false)}
+              >
+                ×
+              </button>
+            </div>
+            <form onSubmit={addPlayer} className="sheet-content grid gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <TextInput
                   label="이름"
                   name="playerName"
@@ -396,6 +1044,12 @@ function App() {
                   placeholder="예: 32"
                   required
                 />
+              </div>
+              {playerFormSource === 'attendees' ? (
+                <p className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-bold text-brand-800">
+                  오늘 참석 용병으로 등록됩니다.
+                </p>
+              ) : (
                 <fieldset className="grid gap-2">
                   <legend className="text-sm font-bold">구분</legend>
                   <div className="grid grid-cols-2 rounded-xl bg-surface-subtle p-1">
@@ -412,8 +1066,7 @@ function App() {
                     ))}
                   </div>
                 </fieldset>
-              </div>
-
+              )}
               <fieldset className="grid gap-2">
                 <legend className="text-sm font-bold">
                   선호 포지션{' '}
@@ -434,7 +1087,7 @@ function App() {
                         disabled={disabled}
                         aria-pressed={selected}
                         onClick={() => toggleNewPlayerPosition(position)}
-                        className={`min-h-10 rounded-full border px-4 text-sm font-semibold transition ${selected ? 'border-brand-700 bg-brand-700 text-white' : 'border-line bg-surface text-ink-muted hover:border-brand-500'} disabled:cursor-not-allowed disabled:opacity-40`}
+                        className={`min-h-9 rounded-full border px-3 text-xs font-semibold ${selected ? 'border-brand-700 bg-brand-700 text-white' : 'border-line bg-surface text-ink-muted'} disabled:opacity-40`}
                       >
                         {position}
                       </button>
@@ -442,425 +1095,15 @@ function App() {
                   })}
                 </div>
               </fieldset>
-
-              <div className="flex justify-end">
-                <Button type="submit">선수 등록하기</Button>
-              </div>
-            </form>
-          </Card>
-        )}
-
-        <div className="grid items-start gap-5 lg:grid-cols-[minmax(320px,0.82fr)_minmax(0,1.18fr)] xl:gap-6">
-          <div className="order-2 grid gap-5 lg:order-1">
-            <Card>
-              <div className="mb-5 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-bold text-brand-700">
-                    01 · 경기 설정
-                  </p>
-                  <h2 className="mt-1 text-xl font-extrabold">
-                    오늘 경기 구성
-                  </h2>
-                </div>
-                <span className="rounded-full bg-surface-subtle px-3 py-1 text-xs font-bold text-ink-muted">
-                  팀매치
-                </span>
-              </div>
-
-              <div className="grid gap-5">
-                <fieldset className="grid gap-2">
-                  <legend className="text-sm font-bold">쿼터 수</legend>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[2, 3, 4, 6].map((count) => (
-                      <button
-                        key={count}
-                        type="button"
-                        aria-pressed={quarterCount === count}
-                        onClick={() => {
-                          setQuarterCount(count);
-                          setMinimumQuarters((current) =>
-                            Math.min(current, count),
-                          );
-                        }}
-                        className={`min-h-11 rounded-xl border text-sm font-bold transition ${quarterCount === count ? 'border-brand-700 bg-brand-50 text-brand-800 ring-1 ring-brand-700' : 'border-line bg-surface text-ink-muted hover:border-brand-500'}`}
-                      >
-                        {count}쿼터
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-
-                <fieldset className="grid gap-2">
-                  <legend className="text-sm font-bold">
-                    포메이션 구성 방식
-                  </legend>
-                  <div className="grid gap-2">
-                    {(
-                      [
-                        ['same', '전 쿼터 동일'],
-                        ['different', '쿼터별 변경'],
-                        ['recommended', '선수 기준 추천'],
-                      ] as const
-                    ).map(([mode, title]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={formationMode === mode}
-                        onClick={() => {
-                          setFormationMode(mode);
-                        }}
-                        className={`flex min-h-12 items-center gap-3 rounded-xl border px-3 text-left transition ${formationMode === mode ? 'border-brand-700 bg-brand-50' : 'border-line hover:border-brand-500'}`}
-                      >
-                        <span
-                          className={`grid size-5 shrink-0 place-items-center rounded-full border ${formationMode === mode ? 'border-brand-700' : 'border-line'}`}
-                        >
-                          {formationMode === mode && (
-                            <span className="size-2.5 rounded-full bg-brand-700" />
-                          )}
-                        </span>
-                        <span>
-                          <span className="block text-sm font-bold">
-                            {title}
-                          </span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </fieldset>
-
-                {formationMode === 'same' && (
-                  <label className="grid gap-2 text-sm font-bold">
-                    포메이션
-                    <select
-                      value={formationId}
-                      onChange={(event) => {
-                        setFormationId(event.target.value);
-                      }}
-                      className="min-h-12 rounded-xl border border-line bg-surface px-4 text-base font-semibold text-ink outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
-                    >
-                      {formations.map((formation) => (
-                        <option key={formation.id} value={formation.id}>
-                          {formation.label} · {formation.description}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-
-                <label className="grid gap-2 text-sm font-bold">
-                  선수별 최소 출전 쿼터
-                  <select
-                    value={minimumQuarters}
-                    onChange={(event) => {
-                      setMinimumQuarters(Number(event.target.value));
-                    }}
-                    className="min-h-12 rounded-xl border border-line bg-surface px-4 text-base font-semibold text-ink outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
-                  >
-                    {Array.from({ length: quarterCount + 1 }, (_, count) => (
-                      <option key={count} value={count}>
-                        {count === 0 ? '최소 보장 없음' : `${count}쿼터 이상`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </Card>
-
-            <Card className="p-0">
-              <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4 sm:px-6">
-                <div>
-                  <p className="text-sm font-bold text-brand-700">
-                    02 · 참석 확인
-                  </p>
-                  <h2 className="mt-1 text-xl font-extrabold">오늘 뛸 선수</h2>
-                </div>
-                <span className="rounded-lg bg-brand-50 px-3 py-1.5 text-sm font-extrabold text-brand-800">
-                  {availablePlayers}명 참석
-                </span>
-              </div>
-              {isSampleData && (
-                <div className="flex items-center justify-between gap-3 border-b border-line bg-accent-50 px-5 py-2.5 text-xs text-accent-700 sm:px-6">
-                  <span>체험용 선수 명단이에요.</span>
-                  <button
-                    type="button"
-                    className="shrink-0 font-bold underline underline-offset-2"
-                    onClick={() => {
-                      setPlayers([]);
-                      setSelectedPlayerIds([]);
-                      setIsSampleData(false);
-                    }}
-                  >
-                    비우고 등록
-                  </button>
-                </div>
-              )}
-              <div className="max-h-[440px] divide-y divide-line overflow-y-auto">
-                {players.map((player) => {
-                  const checked = selectedPlayerIds.includes(player.id);
-
-                  return (
-                    <label
-                      key={player.id}
-                      className={`flex min-h-[68px] cursor-pointer items-center gap-3 px-5 py-3 transition hover:bg-surface-subtle sm:px-6 ${checked ? '' : 'opacity-55'}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleAttendance(player.id)}
-                        className="size-5 accent-brand-700"
-                      />
-                      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-brand-100 text-sm font-extrabold text-brand-800">
-                        {player.name.slice(0, 1)}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-2">
-                          <span className="truncate font-bold">
-                            {player.name}
-                          </span>
-                          <span className="shrink-0 text-xs text-ink-faint">
-                            {player.age}세
-                          </span>
-                        </span>
-                        <span className="mt-0.5 block truncate text-xs text-ink-muted">
-                          {player.preferredPositions.join(' · ')}
-                        </span>
-                      </span>
-                      <span
-                        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${player.type === 'guest' ? 'bg-accent-100 text-accent-700' : 'bg-surface-subtle text-ink-muted'}`}
-                      >
-                        {player.type === 'guest' ? '용병' : '회원'}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3 sm:px-6">
-                <button
-                  type="button"
-                  className="text-sm font-bold text-brand-700 hover:text-brand-900"
-                  onClick={() =>
-                    setSelectedPlayerIds(
-                      selectedPlayerIds.length === players.length
-                        ? []
-                        : players.map(({ id }) => id),
-                    )
-                  }
-                >
-                  {selectedPlayerIds.length === players.length
-                    ? '전체 해제'
-                    : '전체 참석'}
-                </button>
-                <button
-                  type="button"
-                  className="text-sm font-bold text-ink-muted hover:text-ink"
-                  onClick={() => setIsAddingPlayer(true)}
-                >
-                  ＋ 선수 등록
-                </button>
-              </div>
-            </Card>
-          </div>
-
-          <div className="order-1 grid gap-5 lg:sticky lg:top-5 lg:order-2">
-            <Card className="overflow-hidden p-0">
-              <div className="flex flex-col justify-between gap-4 border-b border-line px-5 py-4 sm:flex-row sm:items-center sm:px-6">
-                <div>
-                  <h2 className="mt-1 text-xl font-extrabold">
-                    {activeQuarter >= 0 && lineups.length > 0
-                      ? `${activeQuarter + 1}쿼터 배치`
-                      : '전술 보드'}
-                  </h2>
-                </div>
-                <Button onClick={generateLineups}>
-                  <span aria-hidden="true">✦</span>
-                  자동 배치 다시 적용
+              <div className="sheet-actions border-t border-line pt-3">
+                <Button type="submit" className="w-full">
+                  선수 등록하기
                 </Button>
               </div>
-
-              {lineups.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto border-b border-line px-5 py-3 sm:px-6">
-                  {lineups.map((quarter, index) => (
-                    <button
-                      key={`${quarter.formationId}-${index}`}
-                      type="button"
-                      aria-pressed={activeQuarter === index}
-                      onClick={() => setActiveQuarter(index)}
-                      className={`min-h-10 shrink-0 rounded-lg px-4 text-sm font-bold ${activeQuarter === index ? 'bg-brand-700 text-white' : 'bg-surface-subtle text-ink-muted hover:bg-brand-50'}`}
-                    >
-                      {index + 1}쿼터
-                    </button>
-                  ))}
-                  {activeFormation && (
-                    <span className="ml-auto hidden self-center text-sm font-extrabold text-ink sm:block">
-                      {activeFormation.label}
-                    </span>
-                  )}
-                </div>
-              )}
-
-              <div className="bg-surface-subtle p-3 sm:p-5">
-                <div className="relative min-h-[460px] overflow-hidden rounded-[1.5rem] bg-[#287d52] p-4 shadow-inner sm:min-h-[560px] sm:p-6">
-                  <div className="pointer-events-none absolute inset-3 rounded-[1.2rem] border border-white/45 sm:inset-4" />
-                  <div className="pointer-events-none absolute left-1/2 top-4 bottom-4 border-l border-white/40" />
-                  <div className="pointer-events-none absolute left-1/2 top-1/2 size-24 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/40 sm:size-32" />
-                  <div className="pointer-events-none absolute left-1/2 top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60" />
-                  <div
-                    className="pointer-events-none absolute left-1/2 top-3 w-28 -translate-x-1/2 rounded-b-xl border border-t-0 border-white/40 sm:top-4 sm:w-40"
-                    style={{ height: '13%' }}
-                  />
-                  <div
-                    className="pointer-events-none absolute bottom-3 left-1/2 w-28 -translate-x-1/2 rounded-t-xl border border-b-0 border-white/40 sm:bottom-4 sm:w-40"
-                    style={{ height: '13%' }}
-                  />
-
-                  {activeLineup ? (
-                    <div className="relative flex min-h-[428px] flex-col justify-around py-3 sm:min-h-[512px]">
-                      {groupedSlots.map((group, groupIndex) => (
-                        <div
-                          key={groupIndex}
-                          className="flex flex-wrap justify-center gap-2 sm:gap-3"
-                        >
-                          {group.map((slot) => {
-                            const currentPlayer = selectedPlayers.find(
-                              ({ id }) => id === slot.playerId,
-                            );
-                            const usedIds = new Set(
-                              activeLineup.slots
-                                .filter((_, index) => index !== slot.index)
-                                .map(({ playerId }) => playerId)
-                                .filter((id): id is string => Boolean(id)),
-                            );
-
-                            return (
-                              <label
-                                key={`${slot.position}-${slot.index}`}
-                                className="flex w-[82px] flex-col items-center gap-1.5 sm:w-[100px]"
-                              >
-                                <span className="grid size-12 place-items-center rounded-full border-[3px] border-white bg-white text-xs font-black text-brand-800 shadow-lg sm:size-14 sm:text-sm">
-                                  {currentPlayer?.name.slice(0, 1) ?? '—'}
-                                </span>
-                                <span className="max-w-full truncate rounded-full bg-black/25 px-2 py-0.5 text-[11px] font-bold text-white sm:text-xs">
-                                  {slot.position}
-                                </span>
-                                <select
-                                  aria-label={`${slot.position} 선수 선택`}
-                                  value={slot.playerId ?? ''}
-                                  onChange={(event) =>
-                                    changeQuarterPlayer(
-                                      activeQuarter,
-                                      slot.index,
-                                      event.target.value,
-                                    )
-                                  }
-                                  className="w-full rounded-lg border border-white/45 bg-white/95 px-1.5 py-1.5 text-center text-xs font-bold text-ink outline-none focus:ring-2 focus:ring-accent-500 sm:px-2 sm:text-sm"
-                                >
-                                  <option value="">선수 선택</option>
-                                  {selectedPlayers
-                                    .filter(
-                                      ({ id }) =>
-                                        !usedIds.has(id) ||
-                                        id === slot.playerId,
-                                    )
-                                    .map((player) => (
-                                      <option key={player.id} value={player.id}>
-                                        {player.name}
-                                      </option>
-                                    ))}
-                                </select>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="relative grid min-h-[428px] place-items-center text-center sm:min-h-[512px]">
-                      <div className="max-w-xs rounded-2xl bg-black/20 px-5 py-6 text-white backdrop-blur-sm">
-                        <span
-                          className="mx-auto grid size-12 place-items-center rounded-2xl bg-white/15 text-2xl"
-                          aria-hidden="true"
-                        >
-                          ⚽
-                        </span>
-                        <p className="mt-4 text-lg font-extrabold">
-                          라인업을 만들 준비가 됐어요
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-white/80">
-                          참석자를 확인하고 생성 버튼을 누르면 쿼터별 배치를
-                          보여드려요.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid gap-3 px-5 py-4 sm:grid-cols-[1fr_auto] sm:items-center sm:px-6">
-                <div>
-                  <p className="text-sm font-bold">
-                    {availablePlayers}명 참석 · {quarterCount}쿼터
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-ink-muted">
-                    {canMeetMinimum
-                      ? `최소 ${minimumQuarters}쿼터 출전 기준 적용`
-                      : `최소 ${minimumQuarters}쿼터 기준을 충족할 수 없음`}
-                  </p>
-                </div>
-                {lineups.length > 0 && (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      const current = lineups[activeQuarter];
-                      const text = current?.slots
-                        .map((slot) => {
-                          const player = selectedPlayers.find(
-                            ({ id }) => id === slot.playerId,
-                          );
-                          return `${slot.position}: ${player?.name ?? '미정'}`;
-                        })
-                        .join('\n');
-
-                      if (text && navigator.clipboard) {
-                        void navigator.clipboard.writeText(
-                          `${activeQuarter + 1}쿼터 라인업\n${text}`,
-                        );
-                        setNotice(
-                          '현재 쿼터 라인업을 클립보드에 복사했습니다.',
-                        );
-                      }
-                    }}
-                  >
-                    라인업 복사
-                  </Button>
-                )}
-              </div>
-            </Card>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              {[
-                ['공평한 배치', '쿼터별 출전 수를 고르게 고려'],
-                ['선호 포지션', '1~3순위와 무관 옵션 반영'],
-                ['직접 조정', '생성 후 선수 배치를 수정'],
-              ].map(([title, description], index) => (
-                <div
-                  key={title}
-                  className="rounded-xl border border-line bg-surface px-4 py-3"
-                >
-                  <p className="text-xs font-bold text-brand-700">
-                    0{index + 1}
-                  </p>
-                  <p className="mt-1 text-sm font-extrabold">{title}</p>
-                  <p className="mt-0.5 text-xs text-ink-muted">{description}</p>
-                </div>
-              ))}
-            </div>
-          </div>
+            </form>
+          </section>
         </div>
-
-        <p className="mt-4 text-center text-xs text-ink-faint">
-          명단은 현재 브라우저에 저장됩니다.
-        </p>
-      </PageContainer>
+      )}
     </main>
   );
 }
