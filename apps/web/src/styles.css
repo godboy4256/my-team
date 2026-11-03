@@ -45,6 +45,10 @@
   --breakpoint-2xl: 96rem;
 
   --shadow-card: 0 12px 32px -24px rgb(23 53 34 / 28%);
+  --motion-duration-fast: 160ms;
+  --motion-duration-panel: 280ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0.75, 0.25, 1);
+  --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 :root {
@@ -94,6 +98,12 @@ input,
 select,
 textarea {
   -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a {
+  transition-duration: var(--motion-duration-fast);
+  transition-timing-function: var(--motion-ease-standard);
 }
 
 ::selection {
@@ -245,6 +255,16 @@ textarea {
     background-color 120ms ease;
 }
 
+.player-marker-member {
+  border-color: var(--color-brand-200);
+  background: var(--color-surface);
+}
+
+.player-marker-guest {
+  border-color: var(--color-accent-500);
+  background: var(--color-accent-50);
+}
+
 .player-marker:active {
   cursor: grabbing;
   z-index: 5;
@@ -269,6 +289,26 @@ textarea {
   font-size: clamp(0.7rem, 2.6vw, 0.9rem);
   font-weight: 700;
   text-align: center;
+}
+
+.player-type-tag {
+  display: inline-flex;
+  min-height: 1.2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  color: var(--color-brand-800);
+  background: var(--color-brand-100);
+  font-size: 0.65rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.player-type-tag-guest,
+.player-marker-guest .player-type-tag {
+  color: var(--color-accent-700);
+  background: var(--color-accent-100);
 }
 
 .board-empty {
@@ -304,6 +344,10 @@ textarea {
   font-size: var(--type-body);
 }
 
+.menu-popover a {
+  display: block;
+}
+
 .menu-icon {
   display: flex;
   width: 1.5rem;
@@ -328,13 +372,16 @@ textarea {
   align-items: flex-end;
   justify-content: center;
   background: rgb(10 22 15 / 48%);
+  animation: backdrop-enter var(--motion-duration-panel) ease-out both;
 }
 
 .setup-sheet {
   display: flex;
   width: min(100%, 38rem);
-  max-height: min(88vh, 52rem);
-  max-height: min(88dvh, 52rem);
+  height: min(52vh, 42rem);
+  height: min(52dvh, 42rem);
+  min-height: min(22rem, 52dvh);
+  max-height: 70dvh;
   flex-direction: column;
   overflow: hidden;
   border-radius: 1.25rem 1.25rem 0 0;
@@ -342,6 +389,105 @@ textarea {
   padding-top: 0.6rem;
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   box-shadow: 0 -12px 40px rgb(0 0 0 / 18%);
+  animation: sheet-enter var(--motion-duration-panel) var(--motion-ease-enter)
+    both;
+}
+
+.modal-backdrop {
+  align-items: center;
+  padding: 1.25rem;
+}
+
+.confirm-dialog {
+  width: min(100%, 24rem);
+  border: 1px solid var(--color-line);
+  border-radius: 1.5rem;
+  background: var(--color-surface);
+  padding: 1.5rem;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 22%);
+}
+
+.motion-dialog {
+  animation: dialog-enter var(--motion-duration-panel) var(--motion-ease-enter)
+    both;
+}
+
+.modal-close {
+  width: 3rem;
+  height: 3rem;
+  flex: 0 0 3rem;
+  font-size: 2.25rem;
+  line-height: 1;
+}
+
+.team-management-page {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  background: var(--color-canvas);
+  animation: page-enter var(--motion-duration-panel) var(--motion-ease-enter)
+    both;
+}
+
+.team-page-content {
+  display: grid;
+  width: min(100%, 56rem);
+  gap: 1.25rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem max(2rem, env(safe-area-inset-bottom));
+}
+
+@keyframes backdrop-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-enter {
+  from {
+    opacity: 0.7;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .sheet-handle {
@@ -375,8 +521,9 @@ textarea {
 }
 
 .player-form-sheet {
-  max-height: min(88vh, 40rem);
-  max-height: min(88dvh, 40rem);
+  height: min(52vh, 40rem);
+  height: min(52dvh, 40rem);
+  min-height: min(22rem, 52dvh);
 }
 
 @media (min-width: 48rem) {

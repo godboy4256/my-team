@@ -1,21 +1,41 @@
 export const positions = [
-  'GK',
-  '센터백',
-  '사이드백',
-  '수비형 미드필더',
-  '미드필더',
-  '공격형 미드필더',
-  '윙어',
-  '톱',
+  '골키퍼',
+  '왼쪽 센터백',
+  '오른쪽 센터백',
+  '오른쪽 윙',
+  '왼쪽 윙',
+  '오른쪽 수비형 미드필더',
+  '왼쪽 수비형 미드필더',
+  '중앙 수비형 미드필더',
+  '중앙 미드필더',
+  '왼쪽 미드필더',
+  '오른쪽 미드필더',
+  '오른쪽 공격형 미드필더',
+  '왼쪽 공격형 미드필더',
+  '중앙 공격형 미드필더',
+  '오른쪽 사이드백',
+  '왼쪽 사이드백',
+  '원톱',
+  '왼쪽 투톱',
+  '오른쪽 투톱',
   '포지션 상관없음',
 ] as const;
 
-export type Position = (typeof positions)[number];
+type FormationPosition =
+  | 'GK'
+  | '센터백'
+  | '사이드백'
+  | '수비형 미드필더'
+  | '미드필더'
+  | '공격형 미드필더'
+  | '윙어'
+  | '톱';
+export type Position = (typeof positions)[number] | FormationPosition;
 
 export type Player = {
   id: string;
   name: string;
-  age: number;
+  birthYear: number;
   preferredPositions: Position[];
   type: 'member' | 'guest';
 };
@@ -61,6 +81,28 @@ export type QuarterLineup = {
   slots: LineupSlot[];
 };
 
+export function detectFormationLabel(
+  lineup: QuarterLineup | undefined,
+  isVerticalPitch: boolean,
+  fallbackLabel: string,
+): string {
+  if (!lineup) return fallbackLabel;
+
+  const axis = isVerticalPitch ? 'y' : 'x';
+  const rows = [0, 0, 0, 0];
+  for (const slot of lineup.slots) {
+    if (slot.playerId === null || slot.position === 'GK') continue;
+
+    const coordinate = slot[axis];
+    const area =
+      coordinate < 22 ? 0 : coordinate < 45 ? 1 : coordinate < 63 ? 2 : 3;
+    rows[area] += 1;
+  }
+
+  const occupiedRows = rows.filter((count) => count > 0).reverse();
+  return occupiedRows.length < 2 ? fallbackLabel : occupiedRows.join('-');
+}
+
 export function getFormationPlayerCoordinates(
   formation: Formation,
   position: Position,
@@ -99,7 +141,7 @@ export function getFormationPlayerCoordinates(
     ['윙어', '공격형 미드필더'],
     ['수비형 미드필더', '미드필더'],
     ['센터백', '사이드백'],
-    ['GK'],
+    ['골키퍼'],
   ];
   const groupIndex = is442Midfielder
     ? 1
@@ -162,7 +204,7 @@ export const formations: Formation[] = [
     layout: createFormationLayout(
       { count: 1, lane: 90, spreadStart: 50, spreadEnd: 50 },
       { count: 4, lane: 70, spreadStart: 18, spreadEnd: 82 },
-      { count: 3, lane: 50, spreadStart: 34, spreadEnd: 66 },
+      { count: 3, lane: 50, spreadStart: 22, spreadEnd: 78 },
       { count: 2, lane: 30, spreadStart: 18, spreadEnd: 82 },
       { count: 1, lane: 10, spreadStart: 50, spreadEnd: 50 },
     ),
@@ -321,143 +363,175 @@ export const demoPlayers: Player[] = [
   {
     id: 'p-01',
     name: '김민준',
-    age: 28,
+    birthYear: 1998,
     preferredPositions: ['GK'],
     type: 'member',
   },
   {
     id: 'p-02',
     name: '이도윤',
-    age: 31,
+    birthYear: 1995,
     preferredPositions: ['센터백', '사이드백'],
     type: 'member',
   },
   {
     id: 'p-03',
     name: '박서준',
-    age: 35,
+    birthYear: 1991,
     preferredPositions: ['센터백', '수비형 미드필더'],
     type: 'member',
   },
   {
     id: 'p-04',
     name: '최현우',
-    age: 29,
+    birthYear: 1997,
     preferredPositions: ['사이드백', '윙어'],
     type: 'member',
   },
   {
     id: 'p-05',
     name: '정우진',
-    age: 38,
+    birthYear: 1988,
     preferredPositions: ['센터백', '사이드백'],
     type: 'member',
   },
   {
     id: 'p-06',
     name: '한지훈',
-    age: 32,
+    birthYear: 1994,
     preferredPositions: ['수비형 미드필더', '미드필더'],
     type: 'member',
   },
   {
     id: 'p-07',
     name: '오준호',
-    age: 27,
+    birthYear: 1999,
     preferredPositions: ['미드필더', '공격형 미드필더'],
     type: 'member',
   },
   {
     id: 'p-08',
     name: '윤태양',
-    age: 34,
+    birthYear: 1992,
     preferredPositions: ['미드필더', '윙어'],
     type: 'member',
   },
   {
     id: 'p-09',
     name: '임성민',
-    age: 30,
+    birthYear: 1996,
     preferredPositions: ['윙어', '톱'],
     type: 'member',
   },
   {
     id: 'p-10',
     name: '장민재',
-    age: 26,
+    birthYear: 2000,
     preferredPositions: ['윙어', '공격형 미드필더'],
     type: 'member',
   },
   {
     id: 'p-11',
     name: '조현석',
-    age: 36,
+    birthYear: 1990,
     preferredPositions: ['톱', '윙어'],
     type: 'member',
   },
   {
     id: 'p-12',
     name: '신재원',
-    age: 25,
+    birthYear: 2001,
     preferredPositions: ['공격형 미드필더', '미드필더'],
     type: 'member',
   },
   {
     id: 'p-13',
     name: '강민호',
-    age: 41,
+    birthYear: 1985,
     preferredPositions: ['센터백', '수비형 미드필더'],
     type: 'member',
   },
   {
     id: 'p-14',
     name: '배준영',
-    age: 33,
+    birthYear: 1993,
     preferredPositions: ['톱', '윙어'],
     type: 'member',
   },
   {
     id: 'p-15',
     name: '유승우',
-    age: 29,
+    birthYear: 1997,
     preferredPositions: ['포지션 상관없음'],
     type: 'member',
   },
   {
     id: 'p-16',
     name: '문지환',
-    age: 37,
+    birthYear: 1989,
     preferredPositions: ['미드필더', '사이드백'],
     type: 'member',
   },
   {
     id: 'p-17',
     name: '서준혁',
-    age: 30,
+    birthYear: 1996,
     preferredPositions: ['포지션 상관없음'],
     type: 'guest',
   },
   {
     id: 'p-18',
     name: '권도현',
-    age: 32,
+    birthYear: 1994,
     preferredPositions: ['센터백', '미드필더'],
     type: 'guest',
   },
 ];
+
+function getPositionFamily(position: Position): string | undefined {
+  if (position === 'GK' || position === '골키퍼') return '골키퍼';
+  if (position.includes('센터백')) return '센터백';
+  if (position.includes('사이드백')) return '사이드백';
+  if (position.includes('수비형 미드필더')) return '수비형 미드필더';
+  if (position.includes('공격형 미드필더')) return '공격형 미드필더';
+  if (
+    position === '미드필더' ||
+    position === '중앙 미드필더' ||
+    position === '왼쪽 미드필더' ||
+    position === '오른쪽 미드필더'
+  ) {
+    return '미드필더';
+  }
+  if (position === '윙어' || position.endsWith('윙')) return '윙어';
+  if (
+    position === '톱' ||
+    position === '원톱' ||
+    position === '왼쪽 투톱' ||
+    position === '오른쪽 투톱'
+  ) {
+    return '톱';
+  }
+  return undefined;
+}
 
 function positionScore(player: Player, position: Position): number {
   if (player.preferredPositions.includes('포지션 상관없음')) {
     return 1;
   }
 
-  const preferenceIndex = player.preferredPositions.indexOf(position);
+  const positionFamily = getPositionFamily(position);
+  const preferenceIndex = player.preferredPositions.findIndex(
+    (preferredPosition) =>
+      preferredPosition === position ||
+      (positionFamily !== undefined &&
+        getPositionFamily(preferredPosition) === positionFamily),
+  );
 
   if (preferenceIndex >= 0) {
     return 100 - preferenceIndex * 20;
   }
 
-  const relatedPositions: Partial<Record<Position, Position[]>> = {
+  const relatedFamilies: Record<string, string[]> = {
     센터백: ['사이드백', '수비형 미드필더'],
     사이드백: ['센터백', '윙어'],
     '수비형 미드필더': ['미드필더', '센터백'],
@@ -468,8 +542,11 @@ function positionScore(player: Player, position: Position): number {
   };
 
   if (
-    relatedPositions[position]?.some((related) =>
-      player.preferredPositions.includes(related),
+    positionFamily &&
+    relatedFamilies[positionFamily]?.some((family) =>
+      player.preferredPositions.some(
+        (preferredPosition) => getPositionFamily(preferredPosition) === family,
+      ),
     )
   ) {
     return 30;
