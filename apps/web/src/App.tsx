@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Button, TextInput } from './components';
 import {
   createLineups,
@@ -21,20 +21,39 @@ import type {
 const STORAGE_KEY = 'my-team-lineup-v1';
 const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
 const SECOND_TEAM_LINEUP_STORAGE_KEY = 'my-team-lineups-team-b-v1';
-const FORMATION_ID = '4-3-3';
+const SETUP_STORAGE_KEY = 'my-team-setup-v1';
+const TEAM_INFO_STORAGE_KEY = 'my-team-info-v1';
 
-function createInitialLineups(
-  players: Player[],
-  isVerticalPitch = true,
-): QuarterLineup[] {
-  return createLineups({
-    players,
-    quarterCount: 4,
-    mode: 'same',
-    formationId: FORMATION_ID,
-    minimumQuarters: 2,
-    isVerticalPitch,
-  });
+type TeamInfo = {
+  name: string;
+  homeTown: string;
+  homeGround: string;
+  description: string;
+};
+
+const emptyTeamInfo: TeamInfo = {
+  name: '',
+  homeTown: '',
+  homeGround: '',
+  description: '',
+};
+
+function readTeamInfo(): TeamInfo {
+  try {
+    const value = localStorage.getItem(TEAM_INFO_STORAGE_KEY);
+    if (!value) return emptyTeamInfo;
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== 'object' || parsed === null) return emptyTeamInfo;
+    const info = parsed as Partial<TeamInfo>;
+    return {
+      name: typeof info.name === 'string' ? info.name : '',
+      homeTown: typeof info.homeTown === 'string' ? info.homeTown : '',
+      homeGround: typeof info.homeGround === 'string' ? info.homeGround : '',
+      description: typeof info.description === 'string' ? info.description : '',
+    };
+  } catch {
+    return emptyTeamInfo;
+  }
 }
 
 type StoredState = {
@@ -46,6 +65,108 @@ type StoredState = {
 type SetupStep = 1 | 2 | 3;
 type MatchMode = 'scrimmage' | 'match';
 type LineupCreationMode = 'auto' | 'manual';
+type StoredSetup = {
+  quarterCount: number;
+  minimumQuarters: number;
+  formationMode: FormationMode;
+  formationId: string;
+  matchMode: MatchMode;
+  lineupCreationMode: LineupCreationMode;
+  activeTeam: 'A' | 'B';
+  activeQuarter: number;
+  teamAPlayerIds: string[];
+  teamBPlayerIds: string[];
+  hasTeamAssignments: boolean;
+};
+
+const defaultSetup: StoredSetup = {
+  quarterCount: 4,
+  minimumQuarters: 2,
+  formationMode: 'same',
+  formationId: '4-3-3',
+  matchMode: 'scrimmage',
+  lineupCreationMode: 'auto',
+  activeTeam: 'A',
+  activeQuarter: 0,
+  teamAPlayerIds: [],
+  teamBPlayerIds: [],
+  hasTeamAssignments: false,
+};
+
+function readStoredSetup(): StoredSetup {
+  try {
+    const value = localStorage.getItem(SETUP_STORAGE_KEY);
+    if (!value) return defaultSetup;
+
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== 'object' || parsed === null) return defaultSetup;
+    const setup = parsed as Partial<StoredSetup>;
+    const quarterCount =
+      Number.isInteger(setup.quarterCount) &&
+      setup.quarterCount! >= 1 &&
+      setup.quarterCount! <= 12
+        ? setup.quarterCount!
+        : defaultSetup.quarterCount;
+
+    return {
+      quarterCount,
+      minimumQuarters:
+        Number.isInteger(setup.minimumQuarters) && setup.minimumQuarters! >= 0
+          ? Math.min(setup.minimumQuarters!, quarterCount)
+          : defaultSetup.minimumQuarters,
+      formationMode:
+        setup.formationMode === 'same' ||
+        setup.formationMode === 'different' ||
+        setup.formationMode === 'recommended'
+          ? setup.formationMode
+          : defaultSetup.formationMode,
+      formationId:
+        typeof setup.formationId === 'string' &&
+        formations.some(({ id }) => id === setup.formationId)
+          ? setup.formationId
+          : defaultSetup.formationId,
+      matchMode:
+        setup.matchMode === 'scrimmage' || setup.matchMode === 'match'
+          ? setup.matchMode
+          : defaultSetup.matchMode,
+      lineupCreationMode:
+        setup.lineupCreationMode === 'manual' ||
+        setup.lineupCreationMode === 'auto'
+          ? setup.lineupCreationMode
+          : defaultSetup.lineupCreationMode,
+      activeTeam: setup.activeTeam === 'B' ? 'B' : 'A',
+      activeQuarter:
+        Number.isInteger(setup.activeQuarter) && setup.activeQuarter! >= 0
+          ? Math.min(setup.activeQuarter!, quarterCount - 1)
+          : 0,
+      teamAPlayerIds: Array.isArray(setup.teamAPlayerIds)
+        ? setup.teamAPlayerIds.filter(
+            (id): id is string => typeof id === 'string',
+          )
+        : [],
+      teamBPlayerIds: Array.isArray(setup.teamBPlayerIds)
+        ? setup.teamBPlayerIds.filter(
+            (id): id is string => typeof id === 'string',
+          )
+        : [],
+      hasTeamAssignments:
+        Array.isArray(setup.teamAPlayerIds) &&
+        Array.isArray(setup.teamBPlayerIds),
+    };
+  } catch {
+    return defaultSetup;
+  }
+}
+
+function splitScrimmagePlayers(players: Player[]) {
+  const orderedPlayers = [...players].sort((first, second) =>
+    first.type.localeCompare(second.type),
+  );
+  return {
+    teamA: orderedPlayers.filter((_, index) => index % 2 === 0),
+    teamB: orderedPlayers.filter((_, index) => index % 2 === 1),
+  };
+}
 
 function getPlayerAge(birthYear: number) {
   return new Date().getFullYear() - birthYear;
@@ -172,20 +293,33 @@ function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const initialState = useMemo(readStoredState, []);
+  const initialSetup = useMemo(readStoredSetup, []);
+  const initialAttendees = initialState.players.filter(({ id }) =>
+    initialState.selectedPlayerIds.includes(id),
+  );
+  const defaultScrimmageTeams = splitScrimmagePlayers(initialAttendees);
   const [players, setPlayers] = useState<Player[]>(initialState.players);
   const [isSampleData, setIsSampleData] = useState(initialState.isSampleData);
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>(
     initialState.selectedPlayerIds,
   );
-  const [quarterCount, setQuarterCount] = useState(4);
-  const [quarterCountInput, setQuarterCountInput] = useState('4');
-  const [minimumQuarters, setMinimumQuarters] = useState(2);
-  const [minimumQuartersInput, setMinimumQuartersInput] = useState('2');
-  const [formationMode, setFormationMode] = useState<FormationMode>('same');
-  const [formationId, setFormationId] = useState('4-3-3');
-  const [matchMode, setMatchMode] = useState<MatchMode>('scrimmage');
+  const [quarterCount, setQuarterCount] = useState(initialSetup.quarterCount);
+  const [quarterCountInput, setQuarterCountInput] = useState(
+    String(initialSetup.quarterCount),
+  );
+  const [minimumQuarters, setMinimumQuarters] = useState(
+    initialSetup.minimumQuarters,
+  );
+  const [minimumQuartersInput, setMinimumQuartersInput] = useState(
+    String(initialSetup.minimumQuarters),
+  );
+  const [formationMode, setFormationMode] = useState<FormationMode>(
+    initialSetup.formationMode,
+  );
+  const [formationId, setFormationId] = useState(initialSetup.formationId);
+  const [matchMode, setMatchMode] = useState<MatchMode>(initialSetup.matchMode);
   const [lineupCreationMode, setLineupCreationMode] =
-    useState<LineupCreationMode>('auto');
+    useState<LineupCreationMode>(initialSetup.lineupCreationMode);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [lineups, setLineups] = useState<QuarterLineup[]>(() => {
     try {
@@ -200,15 +334,19 @@ function App() {
       // 오래되었거나 깨진 전술보드는 새 초기 배치로 교체합니다.
     }
 
-    const attendees = initialState.players.filter(({ id }) =>
-      initialState.selectedPlayerIds.includes(id),
-    );
-
-    return attendees.length
-      ? createInitialLineups(
-          attendees,
-          window.matchMedia('(max-width: 47.999rem)').matches,
-        )
+    const initialPlayers =
+      initialSetup.matchMode === 'scrimmage'
+        ? defaultScrimmageTeams.teamA
+        : initialAttendees;
+    return initialPlayers.length
+      ? createLineups({
+          players: initialPlayers,
+          quarterCount: initialSetup.quarterCount,
+          mode: initialSetup.formationMode,
+          formationId: initialSetup.formationId,
+          minimumQuarters: initialSetup.minimumQuarters,
+          isVerticalPitch: window.matchMedia('(max-width: 47.999rem)').matches,
+        })
       : [];
   });
   const [secondTeamLineups, setSecondTeamLineups] = useState<QuarterLineup[]>(
@@ -222,19 +360,45 @@ function App() {
       } catch {
         // 저장 데이터가 손상된 경우 자체전 두 번째 팀은 비워 둡니다.
       }
-      return [];
+      return initialSetup.matchMode === 'scrimmage' &&
+        defaultScrimmageTeams.teamB.length > 0
+        ? createLineups({
+            players: defaultScrimmageTeams.teamB,
+            quarterCount: initialSetup.quarterCount,
+            mode: initialSetup.formationMode,
+            formationId: initialSetup.formationId,
+            minimumQuarters: initialSetup.minimumQuarters,
+            isVerticalPitch: window.matchMedia('(max-width: 47.999rem)')
+              .matches,
+          })
+        : [];
     },
   );
-  const [activeTeam, setActiveTeam] = useState<'A' | 'B'>('A');
-  const [activeQuarter, setActiveQuarter] = useState(0);
+  const [activeTeam, setActiveTeam] = useState<'A' | 'B'>(
+    initialSetup.activeTeam,
+  );
+  const [teamAPlayerIds, setTeamAPlayerIds] = useState<string[]>(
+    initialSetup.hasTeamAssignments
+      ? initialSetup.teamAPlayerIds
+      : defaultScrimmageTeams.teamA.map(({ id }) => id),
+  );
+  const [teamBPlayerIds, setTeamBPlayerIds] = useState<string[]>(
+    initialSetup.hasTeamAssignments
+      ? initialSetup.teamBPlayerIds
+      : defaultScrimmageTeams.teamB.map(({ id }) => id),
+  );
+  const [activeQuarter, setActiveQuarter] = useState(
+    initialSetup.activeQuarter,
+  );
   const [isSetupOpen, setIsSetupOpen] = useState(false);
   const [setupStep, setSetupStep] = useState<SetupStep>(1);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isAddingPlayer, setIsAddingPlayer] = useState(false);
   const [playerCreatedName, setPlayerCreatedName] = useState('');
   const [changingSlotIndex, setChangingSlotIndex] = useState<number | null>(
     null,
   );
+  const [playerReplacementSearch, setPlayerReplacementSearch] = useState('');
+  const [deletingPlayerId, setDeletingPlayerId] = useState<string | null>(null);
   const [playerFormSource, setPlayerFormSource] = useState<
     'menu' | 'attendees'
   >('menu');
@@ -242,13 +406,20 @@ function App() {
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerBirthYear, setNewPlayerBirthYear] = useState('');
   const [newPlayerPositions, setNewPlayerPositions] = useState<Position[]>([]);
+  const [newSubPositionDraft, setNewSubPositionDraft] = useState('');
   const [newPlayerType, setNewPlayerType] = useState<Player['type']>('member');
   const [notice, setNotice] = useState('');
+  const [teamInfo, setTeamInfo] = useState<TeamInfo>(readTeamInfo);
   const [isVerticalPitch, setIsVerticalPitch] = useState(
     () => window.matchMedia('(max-width: 47.999rem)').matches,
   );
   const pitchRef = useRef<HTMLDivElement>(null);
   const dragPlayerId = useRef<string | null>(null);
+  const sheetDragStartY = useRef<number | null>(null);
+  const [sheetDragOffset, setSheetDragOffset] = useState(0);
+  const [isSheetExpanded, setIsSheetExpanded] = useState(false);
+  const [sheetDragProgress, setSheetDragProgress] = useState(0);
+  const [isSheetDragging, setIsSheetDragging] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0, width: 0, height: 0 });
   const previousPitchOrientation = useRef(isVerticalPitch);
   const [dragPosition, setDragPosition] = useState<{
@@ -257,13 +428,78 @@ function App() {
     y: number;
   } | null>(null);
   const isTeamManagementPage = location.pathname === '/team';
+  const isTeamInfoPage = location.pathname === '/team-info';
+  const isStatsPage = location.pathname === '/stats';
+  const isBoardPage = location.pathname === '/';
 
   useEffect(() => {
-    document.title = isTeamManagementPage ? '팀 목록 | MYTEAM' : 'MYTEAM';
-  }, [isTeamManagementPage]);
+    document.title = isTeamManagementPage
+      ? '팀원 관리 | MYTEAM'
+      : isTeamInfoPage
+        ? '팀 정보 | MYTEAM'
+        : isStatsPage
+          ? '스탯 관리 | MYTEAM'
+          : 'MYTEAM';
+  }, [isStatsPage, isTeamInfoPage, isTeamManagementPage]);
 
-  function navigateTo(path: '/' | '/team') {
+  function navigateTo(path: '/' | '/team-info' | '/team' | '/stats') {
     navigate(path);
+  }
+
+  function handleSheetPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    sheetDragStartY.current = event.clientY;
+    setIsSheetDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleSheetPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (sheetDragStartY.current === null) return;
+    const delta = event.clientY - sheetDragStartY.current;
+    const progress = Math.max(-1, Math.min(1, -delta / 180));
+    setSheetDragOffset(Math.max(0, delta));
+    setSheetDragProgress(progress);
+    event.currentTarget.parentElement?.style.setProperty(
+      '--sheet-drag-progress',
+      String(progress),
+    );
+  }
+
+  function handleSheetPointerUp(
+    event: ReactPointerEvent<HTMLDivElement>,
+    close: () => void,
+  ) {
+    if (sheetDragStartY.current === null) return;
+    const delta = event.clientY - sheetDragStartY.current;
+    sheetDragStartY.current = null;
+    event.currentTarget.parentElement?.style.removeProperty(
+      '--sheet-drag-progress',
+    );
+    setIsSheetDragging(false);
+    setSheetDragProgress(0);
+    if (delta < -55) {
+      setSheetDragOffset(0);
+      setIsSheetExpanded(true);
+    }
+    if (delta > 105) {
+      setSheetDragOffset(Math.max(120, delta));
+      window.setTimeout(() => {
+        setIsSheetExpanded(false);
+        setSheetDragOffset(0);
+        close();
+      }, 180);
+    } else if (delta >= -55) {
+      setSheetDragOffset(0);
+    }
+  }
+
+  function saveTeamInfo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      localStorage.setItem(TEAM_INFO_STORAGE_KEY, JSON.stringify(teamInfo));
+      setNotice('팀 정보를 저장했습니다.');
+    } catch {
+      setNotice('팀 정보를 저장하지 못했습니다. 다시 시도해 주세요.');
+    }
   }
 
   const selectedPlayers = useMemo(
@@ -273,9 +509,9 @@ function App() {
   const activeTeamLineups = activeTeam === 'A' ? lineups : secondTeamLineups;
   const activeTeamPlayers =
     matchMode === 'scrimmage'
-      ? [...selectedPlayers]
-          .sort((first, second) => first.type.localeCompare(second.type))
-          .filter((_, index) => index % 2 === (activeTeam === 'A' ? 0 : 1))
+      ? selectedPlayers.filter(({ id }) =>
+          (activeTeam === 'A' ? teamAPlayerIds : teamBPlayerIds).includes(id),
+        )
       : selectedPlayers;
   const activeLineup = activeTeamLineups[activeQuarter];
   const activeFormation = formations.find(
@@ -346,20 +582,72 @@ function App() {
     }
   }, [secondTeamLineups]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SETUP_STORAGE_KEY,
+        JSON.stringify({
+          quarterCount,
+          minimumQuarters,
+          formationMode,
+          formationId,
+          matchMode,
+          lineupCreationMode,
+          activeTeam,
+          activeQuarter,
+          teamAPlayerIds,
+          teamBPlayerIds,
+          hasTeamAssignments: true,
+        } satisfies StoredSetup),
+      );
+    } catch {
+      setNotice('경기 설정을 저장하지 못했습니다.');
+    }
+  }, [
+    activeQuarter,
+    activeTeam,
+    formationId,
+    formationMode,
+    lineupCreationMode,
+    matchMode,
+    minimumQuarters,
+    quarterCount,
+    teamAPlayerIds,
+    teamBPlayerIds,
+  ]);
+
   function toggleAttendance(playerId: string) {
+    const isSelected = selectedPlayerIds.includes(playerId);
     setSelectedPlayerIds((current) =>
       current.includes(playerId)
         ? current.filter((id) => id !== playerId)
         : [...current, playerId],
     );
+    if (matchMode === 'scrimmage') {
+      if (isSelected) {
+        setTeamAPlayerIds((current) => current.filter((id) => id !== playerId));
+        setTeamBPlayerIds((current) => current.filter((id) => id !== playerId));
+      } else if (teamAPlayerIds.length <= teamBPlayerIds.length) {
+        setTeamAPlayerIds((current) => [...current, playerId]);
+      } else {
+        setTeamBPlayerIds((current) => [...current, playerId]);
+      }
+    }
   }
 
   function toggleAllAttendance() {
-    setSelectedPlayerIds(
-      selectedPlayers.length === players.length
-        ? []
-        : players.map(({ id }) => id),
-    );
+    if (selectedPlayers.length === players.length) {
+      setSelectedPlayerIds([]);
+      setTeamAPlayerIds([]);
+      setTeamBPlayerIds([]);
+      return;
+    }
+
+    const attendees = [...players];
+    setSelectedPlayerIds(attendees.map(({ id }) => id));
+    const teams = splitScrimmagePlayers(attendees);
+    setTeamAPlayerIds(teams.teamA.map(({ id }) => id));
+    setTeamBPlayerIds(teams.teamB.map(({ id }) => id));
   }
 
   function updateQuarterCount(value: string) {
@@ -421,15 +709,15 @@ function App() {
     };
 
     if (matchMode === 'scrimmage') {
-      const orderedPlayers = [...selectedPlayers].sort((first, second) =>
-        first.type.localeCompare(second.type),
-      );
-      const teamAPlayers = orderedPlayers.filter((_, index) => index % 2 === 0);
-      const teamBPlayers = orderedPlayers.filter((_, index) => index % 2 === 1);
-      setLineups(createTeamLineups(teamAPlayers));
-      setSecondTeamLineups(createTeamLineups(teamBPlayers));
+      const teams = splitScrimmagePlayers(selectedPlayers);
+      setTeamAPlayerIds(teams.teamA.map(({ id }) => id));
+      setTeamBPlayerIds(teams.teamB.map(({ id }) => id));
+      setLineups(createTeamLineups(teams.teamA));
+      setSecondTeamLineups(createTeamLineups(teams.teamB));
       setActiveTeam('A');
     } else {
+      setTeamAPlayerIds(selectedPlayers.map(({ id }) => id));
+      setTeamBPlayerIds([]);
       setLineups(createTeamLineups(selectedPlayers));
       setSecondTeamLineups([]);
       setActiveTeam('A');
@@ -483,10 +771,21 @@ function App() {
       setSelectedPlayerIds((current) =>
         shouldReplaceSampleRoster ? [player.id] : [...current, player.id],
       );
+      if (shouldReplaceSampleRoster) {
+        setTeamAPlayerIds([player.id]);
+        setTeamBPlayerIds([]);
+      } else if (matchMode === 'scrimmage') {
+        if (teamAPlayerIds.length <= teamBPlayerIds.length) {
+          setTeamAPlayerIds((current) => [...current, player.id]);
+        } else {
+          setTeamBPlayerIds((current) => [...current, player.id]);
+        }
+      }
     }
     setNewPlayerName('');
     setNewPlayerBirthYear('');
     setNewPlayerPositions([]);
+    setNewSubPositionDraft('');
     setNewPlayerType('member');
     setNotice(isEditingPlayer ? `${name} 선수 정보를 수정했습니다.` : '');
     setPlayerCreatedName(
@@ -504,6 +803,7 @@ function App() {
     setNewPlayerName(player.name);
     setNewPlayerBirthYear(String(player.birthYear));
     setNewPlayerPositions(player.preferredPositions);
+    setNewSubPositionDraft('');
     setNewPlayerType(player.type);
     setIsAddingPlayer(true);
   }
@@ -514,7 +814,41 @@ function App() {
     setNewPlayerName('');
     setNewPlayerBirthYear('');
     setNewPlayerPositions([]);
+    setNewSubPositionDraft('');
     setNewPlayerType('member');
+  }
+
+  function deletePlayer() {
+    if (!deletingPlayerId) return;
+    const deletedPlayer = players.find(({ id }) => id === deletingPlayerId);
+    if (!deletedPlayer) return;
+
+    setPlayers((current) =>
+      current.filter(({ id }) => id !== deletingPlayerId),
+    );
+    setSelectedPlayerIds((current) =>
+      current.filter((id) => id !== deletingPlayerId),
+    );
+    setTeamAPlayerIds((current) =>
+      current.filter((id) => id !== deletingPlayerId),
+    );
+    setTeamBPlayerIds((current) =>
+      current.filter((id) => id !== deletingPlayerId),
+    );
+    const clearPlayerFromLineups = (current: QuarterLineup[]) =>
+      current.map((quarter) => ({
+        ...quarter,
+        slots: quarter.slots.map((slot) =>
+          slot.playerId === deletingPlayerId
+            ? { ...slot, playerId: null }
+            : slot,
+        ),
+      }));
+    setLineups(clearPlayerFromLineups);
+    setSecondTeamLineups(clearPlayerFromLineups);
+    setIsSampleData(false);
+    setDeletingPlayerId(null);
+    setNotice(`${deletedPlayer.name} 선수를 팀에서 삭제했습니다.`);
   }
 
   function clearPitchLineup() {
@@ -540,6 +874,7 @@ function App() {
     if (activeTeam === 'A') setLineups(updateLineup);
     else setSecondTeamLineups(updateLineup);
     setChangingSlotIndex(null);
+    setPlayerReplacementSearch('');
   }
 
   function assignPlayerToNextSlot(playerId: string) {
@@ -573,20 +908,50 @@ function App() {
     else setSecondTeamLineups(updateLineup);
   }
 
-  function toggleNewPlayerPosition(position: Position) {
+  function updateMainPosition(value: string) {
+    if (!value) {
+      setNewPlayerPositions([]);
+      return;
+    }
+
+    const nextMain = value as Position;
+    if (nextMain === '포지션 상관없음') {
+      setNewPlayerPositions([nextMain]);
+      return;
+    }
+
     setNewPlayerPositions((current) => {
-      if (position === '포지션 상관없음') {
-        return current.includes(position) ? [] : [position];
+      const currentMain = current[0];
+      const secondary = current
+        .slice(1)
+        .filter((position) => position !== nextMain);
+      if (
+        currentMain &&
+        currentMain !== '포지션 상관없음' &&
+        currentMain !== nextMain
+      ) {
+        secondary.unshift(currentMain);
       }
-
-      const withoutAny = current.filter((item) => item !== '포지션 상관없음');
-
-      if (withoutAny.includes(position)) {
-        return withoutAny.filter((item) => item !== position);
-      }
-
-      return withoutAny.length < 6 ? [...withoutAny, position] : withoutAny;
+      return [nextMain, ...secondary.slice(0, 5)];
     });
+  }
+
+  function addSecondaryPosition(value: string) {
+    if (!value) return;
+    const position = value as Position;
+    setNewPlayerPositions((current) =>
+      current.length >= 6 || current.includes(position)
+        ? current
+        : [...current, position],
+    );
+    setNewSubPositionDraft('');
+  }
+
+  function removeSecondaryPosition(position: Position) {
+    setNewPlayerPositions((current) => [
+      current[0]!,
+      ...current.slice(1).filter((item) => item !== position),
+    ]);
   }
 
   function getPlayerCoordinates(clientX: number, clientY: number) {
@@ -735,57 +1100,6 @@ function App() {
             MY<span className="text-brand-600">TEAM</span>
           </span>
         </a>
-        <button
-          type="button"
-          className="grid size-11 place-items-center rounded-xl text-3xl leading-none text-ink hover:bg-surface-subtle"
-          aria-label="메뉴 열기"
-          aria-expanded={isMenuOpen}
-          onClick={() => setIsMenuOpen((current) => !current)}
-        >
-          <span className="menu-icon" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
-        </button>
-        {isMenuOpen && (
-          <div className="menu-popover absolute right-3 top-14 z-30 w-52 rounded-2xl border border-line bg-surface p-2 shadow-card">
-            <a
-              href="/team"
-              className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold hover:bg-surface-subtle"
-              onClick={(event) => {
-                event.preventDefault();
-                navigateTo('/team');
-                setIsMenuOpen(false);
-              }}
-            >
-              팀 관리
-            </a>
-            <button
-              type="button"
-              className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold hover:bg-surface-subtle"
-              onClick={() => {
-                setPlayerFormSource('menu');
-                setNewPlayerType('member');
-                setIsAddingPlayer(true);
-                setIsMenuOpen(false);
-              }}
-            >
-              선수 등록
-            </button>
-            <button
-              type="button"
-              className="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold hover:bg-surface-subtle"
-              onClick={() => {
-                setIsSetupOpen(true);
-                setSetupStep(1);
-                setIsMenuOpen(false);
-              }}
-            >
-              오늘 경기 참석자
-            </button>
-          </div>
-        )}
       </header>
 
       {notice && (
@@ -806,23 +1120,11 @@ function App() {
       )}
 
       {isTeamManagementPage && (
-        <section className="team-management-page">
+        <section className="team-management-page styled-scrollbar">
           <div className="team-page-content">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h1 id="team-management-title" className="text-2xl font-black">
-                  팀 목록
-                </h1>
-              </div>
-              <button
-                type="button"
-                className="modal-close grid size-11 place-items-center rounded-xl text-3xl text-ink hover:bg-surface-subtle"
-                aria-label="팀 목록 닫기"
-                onClick={() => navigateTo('/')}
-              >
-                ×
-              </button>
-            </div>
+            <h1 id="team-management-title" className="text-2xl font-black">
+              팀 목록
+            </h1>
             <div className="flex justify-end">
               <Button
                 size="sm"
@@ -857,22 +1159,29 @@ function App() {
                           {getPlayerAge(player.birthYear)}세
                         </span>
                       </span>
-                      <span className="flex items-center gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
                         <PlayerTypeBadge type={player.type} />
-                        <span className="truncate text-xs text-ink-muted">
+                        <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">
                           {player.preferredPositions.join(' · ')}
                         </span>
                       </span>
                     </span>
-                    <button
-                      type="button"
-                      className="min-h-10 rounded-lg px-3 text-sm font-bold text-brand-700 hover:bg-brand-50"
-                      onClick={() => {
-                        editPlayer(player);
-                      }}
-                    >
-                      수정
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        className="min-h-10 rounded-lg px-2 text-sm font-bold text-brand-700 hover:bg-brand-50"
+                        onClick={() => editPlayer(player)}
+                      >
+                        수정
+                      </button>
+                      <button
+                        type="button"
+                        className="min-h-10 rounded-lg px-2 text-sm font-bold text-danger hover:bg-red-50"
+                        onClick={() => setDeletingPlayerId(player.id)}
+                      >
+                        삭제
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -881,7 +1190,143 @@ function App() {
         </section>
       )}
 
-      {!isTeamManagementPage && playerCreatedName && (
+      {isTeamInfoPage && (
+        <section className="team-management-page styled-scrollbar">
+          <div className="team-page-content team-info-content">
+            <div className="team-info-heading">
+              <span className="team-info-emblem" aria-hidden="true">
+                ⚽
+              </span>
+              <div>
+                <h1 className="text-2xl font-black">팀 정보</h1>
+                <p className="mt-1 text-sm text-ink-muted">
+                  팀의 기본 정보를 등록하고 관리합니다.
+                </p>
+              </div>
+            </div>
+            <form className="team-info-form" onSubmit={saveTeamInfo}>
+              <TextInput
+                label="팀 이름"
+                name="teamName"
+                value={teamInfo.name}
+                onChange={(event) =>
+                  setTeamInfo((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+                placeholder="예: 마이팀 FC"
+                required
+              />
+              <TextInput
+                label="활동 지역"
+                name="homeTown"
+                value={teamInfo.homeTown}
+                onChange={(event) =>
+                  setTeamInfo((current) => ({
+                    ...current,
+                    homeTown: event.target.value,
+                  }))
+                }
+                placeholder="예: 서울시 마포구"
+              />
+              <TextInput
+                label="주 경기장"
+                name="homeGround"
+                value={teamInfo.homeGround}
+                onChange={(event) =>
+                  setTeamInfo((current) => ({
+                    ...current,
+                    homeGround: event.target.value,
+                  }))
+                }
+                placeholder="예: 월드컵 보조경기장"
+              />
+              <label className="grid gap-1.5 text-sm font-semibold">
+                팀 소개
+                <textarea
+                  name="teamDescription"
+                  value={teamInfo.description}
+                  onChange={(event) =>
+                    setTeamInfo((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                  className="min-h-28 resize-y rounded-xl border border-line bg-surface px-3 py-2 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                  placeholder="팀에 대해 간단히 소개해 주세요."
+                />
+              </label>
+              <Button type="submit" className="w-full sm:w-auto">
+                팀 정보 저장
+              </Button>
+            </form>
+            {teamInfo.name && (
+              <article className="team-info-preview">
+                <p className="text-xs font-bold tracking-wide text-brand-700">
+                  MY TEAM
+                </p>
+                <h2 className="mt-1 text-xl font-black">{teamInfo.name}</h2>
+                {(teamInfo.homeTown || teamInfo.homeGround) && (
+                  <p className="mt-2 text-sm text-ink-muted">
+                    {[teamInfo.homeTown, teamInfo.homeGround]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                )}
+                {teamInfo.description && (
+                  <p className="mt-3 whitespace-pre-wrap text-sm text-ink-muted">
+                    {teamInfo.description}
+                  </p>
+                )}
+              </article>
+            )}
+          </div>
+        </section>
+      )}
+      {isStatsPage && (
+        <section className="team-management-page" aria-label="스탯 관리" />
+      )}
+
+      {deletingPlayerId && (
+        <div
+          className="sheet-backdrop modal-backdrop"
+          role="presentation"
+          onClick={() => setDeletingPlayerId(null)}
+        >
+          <section
+            className="confirm-dialog motion-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-player-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="delete-player-title" className="text-lg font-extrabold">
+              팀원을 삭제할까요?
+            </h2>
+            <p className="mt-2 text-sm text-ink-muted">
+              {players.find(({ id }) => id === deletingPlayerId)?.name} 선수를
+              팀 명단과 라인업에서 삭제합니다.
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setDeletingPlayerId(null)}
+              >
+                취소
+              </Button>
+              <Button
+                className="bg-danger hover:bg-danger"
+                onClick={deletePlayer}
+              >
+                삭제
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {isBoardPage && playerCreatedName && (
         <div
           className="sheet-backdrop modal-backdrop"
           role="presentation"
@@ -929,7 +1374,7 @@ function App() {
         </div>
       )}
 
-      {!isTeamManagementPage && changingSlotIndex !== null && activeLineup && (
+      {isBoardPage && changingSlotIndex !== null && activeLineup && (
         <div
           className="sheet-backdrop modal-backdrop"
           role="presentation"
@@ -960,13 +1405,30 @@ function App() {
                 ×
               </button>
             </div>
-            <div className="mt-4 grid max-h-64 gap-1 overflow-y-auto">
+            <TextInput
+              label="선수 검색"
+              name="playerReplacementSearch"
+              type="search"
+              value={playerReplacementSearch}
+              onChange={(event) =>
+                setPlayerReplacementSearch(event.target.value)
+              }
+              placeholder="이름으로 찾기"
+            />
+            <div className="modal-scroll-region styled-scrollbar mt-2 grid max-h-64 gap-1 overflow-y-auto">
               {activeTeamPlayers
                 .filter(
                   ({ id }) =>
                     !activeLineup.slots.some(
                       (slot, index) =>
                         index !== changingSlotIndex && slot.playerId === id,
+                    ),
+                )
+                .filter(({ name }) =>
+                  name
+                    .toLocaleLowerCase('ko-KR')
+                    .includes(
+                      playerReplacementSearch.trim().toLocaleLowerCase('ko-KR'),
                     ),
                 )
                 .map((player) => (
@@ -986,12 +1448,28 @@ function App() {
                     </span>
                   </button>
                 ))}
+              {activeTeamPlayers.filter(
+                ({ name, id }) =>
+                  name
+                    .toLocaleLowerCase('ko-KR')
+                    .includes(
+                      playerReplacementSearch.trim().toLocaleLowerCase('ko-KR'),
+                    ) &&
+                  !activeLineup.slots.some(
+                    (slot, index) =>
+                      index !== changingSlotIndex && slot.playerId === id,
+                  ),
+              ).length === 0 && (
+                <p className="py-5 text-center text-sm text-ink-muted">
+                  교체할 선수가 없습니다.
+                </p>
+              )}
             </div>
           </section>
         </div>
       )}
 
-      {!isTeamManagementPage && (
+      {isBoardPage && (
         <>
           <section className="board-area" aria-label="전술 보드">
             <div className="board-meta flex items-center justify-between px-3 py-2 text-xs font-bold text-ink-muted">
@@ -1043,6 +1521,7 @@ function App() {
                         }}
                         onContextMenu={(event) => {
                           event.preventDefault();
+                          setPlayerReplacementSearch('');
                           setChangingSlotIndex(slotIndex);
                         }}
                         onPointerDown={(event) =>
@@ -1208,13 +1687,37 @@ function App() {
           onClick={() => setIsSetupOpen(false)}
         >
           <section
-            className="setup-sheet"
+            className={`setup-sheet ${isSheetExpanded ? 'sheet-expanded' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="setup-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sheet-handle" />
+            <div
+              className="sheet-handle"
+              role="button"
+              tabIndex={0}
+              aria-label="위로 끌어올려 모달 확장, 아래로 끌어내려 닫기"
+              style={{
+                transform: `translateY(${sheetDragOffset}px) scaleX(${1 + Math.max(0, sheetDragProgress) * 0.22})`,
+              }}
+              data-drag-progress={sheetDragProgress}
+              data-dragging={isSheetDragging}
+              onPointerDown={handleSheetPointerDown}
+              onPointerMove={handleSheetPointerMove}
+              onPointerUp={(event) =>
+                handleSheetPointerUp(event, () => setIsSetupOpen(false))
+              }
+              onPointerCancel={(event) => {
+                sheetDragStartY.current = null;
+                event.currentTarget.parentElement?.style.removeProperty(
+                  '--sheet-drag-progress',
+                );
+                setSheetDragOffset(0);
+                setSheetDragProgress(0);
+                setIsSheetDragging(false);
+              }}
+            />
             <div className="flex items-start justify-between gap-3 px-4 pb-3">
               <div>
                 <p className="text-xs font-bold text-brand-700">
@@ -1238,7 +1741,7 @@ function App() {
               </button>
             </div>
 
-            <div className="sheet-content">
+            <div className="sheet-content styled-scrollbar">
               {setupStep === 1 && (
                 <div className="grid gap-3">
                   <div className="grid gap-2">
@@ -1302,7 +1805,7 @@ function App() {
                       </button>
                     </div>
                   ) : (
-                    <div className="attendee-list divide-y divide-line overflow-y-auto rounded-2xl border border-line">
+                    <div className="attendee-list styled-scrollbar divide-y divide-line overflow-y-auto rounded-2xl border border-line">
                       {players
                         .filter(({ name }) =>
                           name
@@ -1564,13 +2067,37 @@ function App() {
           onClick={closePlayerForm}
         >
           <section
-            className="setup-sheet player-form-sheet"
+            className={`setup-sheet player-form-sheet ${isSheetExpanded ? 'sheet-expanded' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="player-form-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="sheet-handle" />
+            <div
+              className="sheet-handle"
+              role="button"
+              tabIndex={0}
+              aria-label="위로 끌어올려 모달 확장, 아래로 끌어내려 닫기"
+              style={{
+                transform: `translateY(${sheetDragOffset}px) scaleX(${1 + Math.max(0, sheetDragProgress) * 0.22})`,
+              }}
+              data-drag-progress={sheetDragProgress}
+              data-dragging={isSheetDragging}
+              onPointerDown={handleSheetPointerDown}
+              onPointerMove={handleSheetPointerMove}
+              onPointerUp={(event) =>
+                handleSheetPointerUp(event, closePlayerForm)
+              }
+              onPointerCancel={(event) => {
+                sheetDragStartY.current = null;
+                event.currentTarget.parentElement?.style.removeProperty(
+                  '--sheet-drag-progress',
+                );
+                setSheetDragOffset(0);
+                setSheetDragProgress(0);
+                setIsSheetDragging(false);
+              }}
+            />
             <div className="flex items-center justify-between px-4 pb-3">
               <h2 id="player-form-title" className="text-lg font-extrabold">
                 {editingPlayerId
@@ -1588,7 +2115,10 @@ function App() {
                 ×
               </button>
             </div>
-            <form onSubmit={addPlayer} className="sheet-content grid gap-4">
+            <form
+              onSubmit={addPlayer}
+              className="sheet-content styled-scrollbar grid gap-4"
+            >
               <div className="grid grid-cols-2 gap-3">
                 <TextInput
                   label="이름"
@@ -1635,34 +2165,75 @@ function App() {
                   </div>
                 </fieldset>
               )}
-              <fieldset className="grid gap-2">
-                <legend className="text-sm font-bold">
-                  선호 포지션{' '}
-                  <span className="font-medium text-ink-faint">최대 6개</span>
-                </legend>
-                <div className="flex flex-wrap gap-2">
-                  {positions.map((position) => {
-                    const selected = newPlayerPositions.includes(position);
-                    const disabled =
-                      !selected &&
-                      newPlayerPositions.length >= 6 &&
-                      position !== '포지션 상관없음';
-
-                    return (
-                      <button
+              <div className="grid gap-3">
+                <label className="grid gap-1.5 text-sm font-semibold">
+                  메인 포지션
+                  <select
+                    value={newPlayerPositions[0] ?? ''}
+                    onChange={(event) => updateMainPosition(event.target.value)}
+                    className="min-h-11 rounded-xl border border-line bg-surface px-3 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                    required
+                  >
+                    <option value="">메인 포지션 선택</option>
+                    {positions.map((position) => (
+                      <option key={position} value={position}>
+                        {position}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-sm font-semibold">
+                  서브 포지션{' '}
+                  <span className="font-normal text-ink-faint">
+                    {Math.max(0, newPlayerPositions.length - 1)} / 5개 선택
+                  </span>
+                  <select
+                    value={newSubPositionDraft}
+                    onChange={(event) =>
+                      addSecondaryPosition(event.target.value)
+                    }
+                    disabled={
+                      !newPlayerPositions[0] ||
+                      newPlayerPositions[0] === '포지션 상관없음' ||
+                      newPlayerPositions.length >= 6
+                    }
+                    className="min-h-11 rounded-xl border border-line bg-surface px-3 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
+                  >
+                    <option value="">서브 포지션 추가</option>
+                    {positions
+                      .filter((position) => position !== '포지션 상관없음')
+                      .map((position) => (
+                        <option
+                          key={position}
+                          value={position}
+                          disabled={newPlayerPositions.includes(position)}
+                        >
+                          {position}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                {newPlayerPositions.length > 1 && (
+                  <div className="flex flex-wrap gap-2">
+                    {newPlayerPositions.slice(1).map((position) => (
+                      <span
                         key={position}
-                        type="button"
-                        disabled={disabled}
-                        aria-pressed={selected}
-                        onClick={() => toggleNewPlayerPosition(position)}
-                        className={`min-h-9 rounded-full border px-3 text-xs font-semibold ${selected ? 'border-brand-700 bg-brand-700 text-white' : 'border-line bg-surface text-ink-muted'} disabled:opacity-40`}
+                        className="inline-flex min-h-8 items-center gap-1 rounded-full bg-brand-50 px-3 text-xs font-semibold text-brand-800"
                       >
                         {position}
-                      </button>
-                    );
-                  })}
-                </div>
-              </fieldset>
+                        <button
+                          type="button"
+                          className="grid size-5 place-items-center rounded-full text-base leading-none hover:bg-brand-100"
+                          aria-label={`${position} 서브 포지션 삭제`}
+                          onClick={() => removeSecondaryPosition(position)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="sheet-actions border-t border-line pt-3">
                 <Button type="submit" className="w-full">
                   {editingPlayerId ? '수정 완료' : '선수 등록하기'}
@@ -1672,6 +2243,30 @@ function App() {
           </section>
         </div>
       )}
+      <nav className="bottom-navigation" aria-label="주요 메뉴">
+        {(
+          [
+            { to: '/team-info', label: '팀 정보', icon: '▤' },
+            { to: '/', label: '전술보드', icon: '⚽' },
+            { to: '/team', label: '팀원 관리', icon: '♙' },
+            { to: '/stats', label: '스탯 관리', icon: '▥' },
+          ] as const
+        ).map(({ to, label, icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) =>
+              `bottom-navigation-item ${isActive ? 'is-active' : ''}`
+            }
+          >
+            <span className="bottom-navigation-icon" aria-hidden="true">
+              {icon}
+            </span>
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </main>
   );
 }
