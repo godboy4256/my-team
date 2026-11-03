@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Button, TextInput } from './components';
+import { ActionIcon, AutoGrowTextarea, Button, TextInput } from './components';
 import {
   createLineups,
   detectFormationLabel,
@@ -29,6 +29,12 @@ type TeamInfo = {
   homeTown: string;
   homeGround: string;
   description: string;
+  foundedAt: string;
+  activityTime: string;
+  kfaRegistered: boolean;
+  competitions: string;
+  emblem: string;
+  logoDataUrl: string;
 };
 
 const emptyTeamInfo: TeamInfo = {
@@ -36,6 +42,12 @@ const emptyTeamInfo: TeamInfo = {
   homeTown: '',
   homeGround: '',
   description: '',
+  foundedAt: '',
+  activityTime: '',
+  kfaRegistered: false,
+  competitions: '',
+  emblem: '⚽',
+  logoDataUrl: '',
 };
 
 function readTeamInfo(): TeamInfo {
@@ -50,6 +62,14 @@ function readTeamInfo(): TeamInfo {
       homeTown: typeof info.homeTown === 'string' ? info.homeTown : '',
       homeGround: typeof info.homeGround === 'string' ? info.homeGround : '',
       description: typeof info.description === 'string' ? info.description : '',
+      foundedAt: typeof info.foundedAt === 'string' ? info.foundedAt : '',
+      activityTime:
+        typeof info.activityTime === 'string' ? info.activityTime : '',
+      kfaRegistered: info.kfaRegistered === true,
+      competitions:
+        typeof info.competitions === 'string' ? info.competitions : '',
+      emblem: typeof info.emblem === 'string' ? info.emblem : '⚽',
+      logoDataUrl: typeof info.logoDataUrl === 'string' ? info.logoDataUrl : '',
     };
   } catch {
     return emptyTeamInfo;
@@ -410,6 +430,14 @@ function App() {
   const [newPlayerType, setNewPlayerType] = useState<Player['type']>('member');
   const [notice, setNotice] = useState('');
   const [teamInfo, setTeamInfo] = useState<TeamInfo>(readTeamInfo);
+  const [isTeamInfoEditorOpen, setIsTeamInfoEditorOpen] = useState(false);
+  const [teamInfoDraft, setTeamInfoDraft] = useState<TeamInfo>(teamInfo);
+  const [playerSearch, setPlayerSearch] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timeoutId = window.setTimeout(() => setNotice(''), 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [notice]);
   const [isVerticalPitch, setIsVerticalPitch] = useState(
     () => window.matchMedia('(max-width: 47.999rem)').matches,
   );
@@ -495,7 +523,12 @@ function App() {
   function saveTeamInfo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
-      localStorage.setItem(TEAM_INFO_STORAGE_KEY, JSON.stringify(teamInfo));
+      localStorage.setItem(
+        TEAM_INFO_STORAGE_KEY,
+        JSON.stringify(teamInfoDraft),
+      );
+      setTeamInfo(teamInfoDraft);
+      setIsTeamInfoEditorOpen(false);
       setNotice('팀 정보를 저장했습니다.');
     } catch {
       setNotice('팀 정보를 저장하지 못했습니다. 다시 시도해 주세요.');
@@ -1122,68 +1155,75 @@ function App() {
       {isTeamManagementPage && (
         <section className="team-management-page styled-scrollbar">
           <div className="team-page-content">
-            <h1 id="team-management-title" className="text-2xl font-black">
-              팀 목록
-            </h1>
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setPlayerFormSource('menu');
-                  setNewPlayerType('member');
-                  setIsAddingPlayer(true);
-                }}
-              >
-                + 선수 등록
-              </Button>
-            </div>
-            {players.length === 0 ? (
+            <TextInput
+              label="선수 검색"
+              name="teamPlayerSearch"
+              type="search"
+              value={playerSearch}
+              onChange={(event) => setPlayerSearch(event.target.value)}
+              placeholder="이름으로 선수를 검색해 주세요"
+            />
+            {players.filter(({ name }) =>
+              name
+                .toLocaleLowerCase('ko-KR')
+                .includes(playerSearch.trim().toLocaleLowerCase('ko-KR')),
+            ).length === 0 ? (
               <p className="rounded-2xl bg-surface-subtle p-5 text-center text-sm text-ink-muted">
-                등록된 팀원이 없습니다.
+                {players.length === 0
+                  ? '등록된 팀원이 없습니다.'
+                  : '검색 결과가 없습니다.'}
               </p>
             ) : (
               <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
-                {players.map((player) => (
-                  <div
-                    key={player.id}
-                    className="flex min-h-16 items-center gap-3 px-4 py-3"
-                  >
-                    <span className="grid size-10 shrink-0 place-items-center rounded-full bg-brand-100 font-extrabold text-brand-800">
-                      {player.name.slice(0, 1)}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-bold">
-                        {player.name}
-                        <span className="ml-2 text-xs font-medium text-ink-faint">
-                          {player.birthYear}년생 · 만{' '}
-                          {getPlayerAge(player.birthYear)}세
+                {players
+                  .filter(({ name }) =>
+                    name
+                      .toLocaleLowerCase('ko-KR')
+                      .includes(playerSearch.trim().toLocaleLowerCase('ko-KR')),
+                  )
+                  .map((player) => (
+                    <div
+                      key={player.id}
+                      className="flex min-h-16 items-center gap-3 px-4 py-3"
+                    >
+                      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-brand-100 font-extrabold text-brand-800">
+                        {player.name.slice(0, 1)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-bold">
+                          {player.name}
+                          <span className="ml-2 text-xs font-medium text-ink-faint">
+                            {player.birthYear}년생 · 만{' '}
+                            {getPlayerAge(player.birthYear)}세
+                          </span>
+                        </span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <PlayerTypeBadge type={player.type} />
+                          <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">
+                            {player.preferredPositions.join(' · ')}
+                          </span>
                         </span>
                       </span>
-                      <span className="flex min-w-0 items-center gap-2">
-                        <PlayerTypeBadge type={player.type} />
-                        <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">
-                          {player.preferredPositions.join(' · ')}
-                        </span>
-                      </span>
-                    </span>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        className="min-h-10 rounded-lg px-2 text-sm font-bold text-brand-700 hover:bg-brand-50"
-                        onClick={() => editPlayer(player)}
-                      >
-                        수정
-                      </button>
-                      <button
-                        type="button"
-                        className="min-h-10 rounded-lg px-2 text-sm font-bold text-danger hover:bg-red-50"
-                        onClick={() => setDeletingPlayerId(player.id)}
-                      >
-                        삭제
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          className="action-icon-button text-brand-700 hover:bg-brand-50"
+                          aria-label={`${player.name} 선수 수정`}
+                          onClick={() => editPlayer(player)}
+                        >
+                          <ActionIcon name="edit" className="size-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="action-icon-button text-danger hover:bg-red-50"
+                          aria-label={`${player.name} 선수 삭제`}
+                          onClick={() => setDeletingPlayerId(player.id)}
+                        >
+                          <ActionIcon name="trash" className="size-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
               </div>
             )}
           </div>
@@ -1195,22 +1235,108 @@ function App() {
           <div className="team-page-content team-info-content">
             <div className="team-info-heading">
               <span className="team-info-emblem" aria-hidden="true">
-                ⚽
+                {teamInfo.logoDataUrl ? (
+                  <img
+                    src={teamInfo.logoDataUrl}
+                    alt="팀 로고"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  teamInfo.emblem
+                )}
               </span>
-              <div>
-                <h1 className="text-2xl font-black">팀 정보</h1>
-                <p className="mt-1 text-sm text-ink-muted">
-                  팀의 기본 정보를 등록하고 관리합니다.
+              <button
+                type="button"
+                className="action-icon-button ml-auto text-brand-700 hover:bg-brand-50"
+                aria-label="팀 정보 수정"
+                onClick={() => {
+                  setTeamInfoDraft(teamInfo);
+                  setIsTeamInfoEditorOpen(true);
+                }}
+              >
+                <ActionIcon name="edit" className="size-5" />
+              </button>
+            </div>
+            <article className="team-info-preview">
+              <h2 className="text-xl font-black">
+                {teamInfo.name || '팀 이름을 등록해 주세요'}
+              </h2>
+              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <p>
+                  <strong>활동 지역</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.homeTown || '미등록'}
+                  </span>
+                </p>
+                <p>
+                  <strong>주 경기장</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.homeGround || '미등록'}
+                  </span>
+                </p>
+                <p>
+                  <strong>창단일</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.foundedAt || '미등록'}
+                  </span>
+                </p>
+                <p>
+                  <strong>활동 시간</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.activityTime || '미등록'}
+                  </span>
+                </p>
+                <p>
+                  <strong>KFA 등록</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.kfaRegistered ? '등록' : '미등록'}
+                  </span>
+                </p>
+                <p>
+                  <strong>총 인원</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {players.length}명
+                  </span>
+                </p>
+                <p className="sm:col-span-2">
+                  <strong>주요 참가 대회</strong>
+                  <span className="ml-2 text-ink-muted">
+                    {teamInfo.competitions || '미등록'}
+                  </span>
                 </p>
               </div>
-            </div>
-            <form className="team-info-form" onSubmit={saveTeamInfo}>
+              {teamInfo.description && (
+                <p className="mt-4 whitespace-pre-wrap border-t border-line pt-4 text-sm text-ink-muted">
+                  {teamInfo.description}
+                </p>
+              )}
+            </article>
+          </div>
+        </section>
+      )}
+      {isTeamInfoEditorOpen && (
+        <div
+          className="sheet-backdrop modal-backdrop"
+          role="presentation"
+          onClick={() => setIsTeamInfoEditorOpen(false)}
+        >
+          <section
+            className="confirm-dialog motion-dialog team-info-editor"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="team-info-editor-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="team-info-editor-title" className="text-lg font-extrabold">
+              팀 정보 수정
+            </h2>
+            <form className="team-info-form mt-4" onSubmit={saveTeamInfo}>
               <TextInput
                 label="팀 이름"
                 name="teamName"
-                value={teamInfo.name}
+                value={teamInfoDraft.name}
                 onChange={(event) =>
-                  setTeamInfo((current) => ({
+                  setTeamInfoDraft((current) => ({
                     ...current,
                     name: event.target.value,
                   }))
@@ -1221,9 +1347,9 @@ function App() {
               <TextInput
                 label="활동 지역"
                 name="homeTown"
-                value={teamInfo.homeTown}
+                value={teamInfoDraft.homeTown}
                 onChange={(event) =>
-                  setTeamInfo((current) => ({
+                  setTeamInfoDraft((current) => ({
                     ...current,
                     homeTown: event.target.value,
                   }))
@@ -1233,9 +1359,9 @@ function App() {
               <TextInput
                 label="주 경기장"
                 name="homeGround"
-                value={teamInfo.homeGround}
+                value={teamInfoDraft.homeGround}
                 onChange={(event) =>
-                  setTeamInfo((current) => ({
+                  setTeamInfoDraft((current) => ({
                     ...current,
                     homeGround: event.target.value,
                   }))
@@ -1243,46 +1369,130 @@ function App() {
                 placeholder="예: 월드컵 보조경기장"
               />
               <label className="grid gap-1.5 text-sm font-semibold">
-                팀 소개
-                <textarea
-                  name="teamDescription"
-                  value={teamInfo.description}
+                창단일
+                <input
+                  type="date"
+                  value={teamInfoDraft.foundedAt}
                   onChange={(event) =>
-                    setTeamInfo((current) => ({
+                    setTeamInfoDraft((current) => ({
+                      ...current,
+                      foundedAt: event.target.value,
+                    }))
+                  }
+                  className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                />
+              </label>
+              <TextInput
+                label="활동 시간"
+                name="activityTime"
+                value={teamInfoDraft.activityTime}
+                onChange={(event) =>
+                  setTeamInfoDraft((current) => ({
+                    ...current,
+                    activityTime: event.target.value,
+                  }))
+                }
+                placeholder="예: 매주 일요일 오전 8시"
+              />
+              <label className="grid gap-1.5 text-sm font-semibold">
+                주요 참가 대회
+                <input
+                  value={teamInfoDraft.competitions}
+                  onChange={(event) =>
+                    setTeamInfoDraft((current) => ({
+                      ...current,
+                      competitions: event.target.value,
+                    }))
+                  }
+                  placeholder="예: 마포구 생활체육 축구대회"
+                  className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                />
+              </label>
+              <label className="flex min-h-10 items-center gap-2 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={teamInfoDraft.kfaRegistered}
+                  onChange={(event) =>
+                    setTeamInfoDraft((current) => ({
+                      ...current,
+                      kfaRegistered: event.target.checked,
+                    }))
+                  }
+                />
+                KFA 팀 등록
+              </label>
+              <label className="grid gap-2 text-sm font-semibold">
+                팀 로고
+                <span className="flex flex-wrap gap-2">
+                  {['⚽', '🛡️', '🦅', '🐯', '⭐'].map((emblem) => (
+                    <button
+                      key={emblem}
+                      type="button"
+                      aria-label={`${emblem} 로고 선택`}
+                      aria-pressed={
+                        teamInfoDraft.emblem === emblem &&
+                        !teamInfoDraft.logoDataUrl
+                      }
+                      onClick={() =>
+                        setTeamInfoDraft((current) => ({
+                          ...current,
+                          emblem,
+                          logoDataUrl: '',
+                        }))
+                      }
+                      className={`grid size-11 place-items-center rounded-xl border text-xl ${teamInfoDraft.emblem === emblem && !teamInfoDraft.logoDataUrl ? 'border-brand-600 bg-brand-50' : 'border-line'}`}
+                    >
+                      {emblem}
+                    </button>
+                  ))}
+                </span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      if (typeof reader.result === 'string')
+                        setTeamInfoDraft((current) => ({
+                          ...current,
+                          logoDataUrl: reader.result as string,
+                        }));
+                    };
+                    reader.readAsDataURL(file);
+                  }}
+                  className="text-sm"
+                />
+                <span className="text-xs font-normal text-ink-muted">
+                  이미지는 이 브라우저에만 저장됩니다.
+                </span>
+              </label>
+              <label className="grid gap-1.5 text-sm font-semibold">
+                팀 소개
+                <AutoGrowTextarea
+                  value={teamInfoDraft.description}
+                  onChange={(event) =>
+                    setTeamInfoDraft((current) => ({
                       ...current,
                       description: event.target.value,
                     }))
                   }
-                  className="min-h-28 resize-y rounded-xl border border-line bg-surface px-3 py-2 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
                   placeholder="팀에 대해 간단히 소개해 주세요."
                 />
               </label>
-              <Button type="submit" className="w-full sm:w-auto">
-                팀 정보 저장
-              </Button>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  onClick={() => setIsTeamInfoEditorOpen(false)}
+                >
+                  취소
+                </Button>
+                <Button type="submit">저장</Button>
+              </div>
             </form>
-            {teamInfo.name && (
-              <article className="team-info-preview">
-                <p className="text-xs font-bold tracking-wide text-brand-700">
-                  MY TEAM
-                </p>
-                <h2 className="mt-1 text-xl font-black">{teamInfo.name}</h2>
-                {(teamInfo.homeTown || teamInfo.homeGround) && (
-                  <p className="mt-2 text-sm text-ink-muted">
-                    {[teamInfo.homeTown, teamInfo.homeGround]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </p>
-                )}
-                {teamInfo.description && (
-                  <p className="mt-3 whitespace-pre-wrap text-sm text-ink-muted">
-                    {teamInfo.description}
-                  </p>
-                )}
-              </article>
-            )}
-          </div>
-        </section>
+          </section>
+        </div>
       )}
       {isStatsPage && (
         <section className="team-management-page" aria-label="스탯 관리" />
@@ -1324,6 +1534,45 @@ function App() {
             </div>
           </section>
         </div>
+      )}
+      <nav className="bottom-navigation" aria-label="주요 메뉴">
+        {(
+          [
+            { to: '/team-info', label: '팀 정보', icon: '▤' },
+            { to: '/', label: '전술보드', icon: '⚽' },
+            { to: '/team', label: '팀원 관리', icon: '♙' },
+            { to: '/stats', label: '스탯 관리', icon: '▥' },
+          ] as const
+        ).map(({ to, label, icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={({ isActive }) =>
+              `bottom-navigation-item ${isActive ? 'is-active' : ''}`
+            }
+          >
+            <span className="bottom-navigation-icon" aria-hidden="true">
+              {icon}
+            </span>
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
+
+      {isTeamManagementPage && (
+        <button
+          type="button"
+          className="player-add-fab"
+          aria-label="선수 추가"
+          onClick={() => {
+            setPlayerFormSource('menu');
+            setNewPlayerType('member');
+            setIsAddingPlayer(true);
+          }}
+        >
+          <span aria-hidden="true">+</span>
+        </button>
       )}
 
       {isBoardPage && playerCreatedName && (
@@ -1472,12 +1721,14 @@ function App() {
       {isBoardPage && (
         <>
           <section className="board-area" aria-label="전술 보드">
-            <div className="board-meta flex items-center justify-between px-3 py-2 text-xs font-bold text-ink-muted">
-              <span>
-                {activeQuarter + 1}쿼터 · {detectedFormationLabel}
-              </span>
-              <span>{activeTeamPlayers.length}명 참석</span>
-            </div>
+            {activeLineup && (
+              <div className="board-meta flex items-center justify-between px-3 py-2 text-xs font-bold text-ink-muted">
+                <span>
+                  {activeQuarter + 1}쿼터 · {detectedFormationLabel}
+                </span>
+                <span>{activeTeamPlayers.length}명 참석</span>
+              </div>
+            )}
 
             <div ref={pitchRef} className="pitch">
               <div className="pitch-line pitch-border" />
@@ -1672,9 +1923,9 @@ function App() {
               type="button"
               className="min-h-12 rounded-xl border border-line px-3 text-sm font-bold text-ink-muted hover:bg-surface-subtle"
               onClick={clearPitchLineup}
-              aria-label="전술 보드 비우기"
+              aria-label="전술판 초기화"
             >
-              보드 비우기
+              전술판 초기화
             </button>
           </footer>
         </>
@@ -1847,7 +2098,7 @@ function App() {
                               <PlayerTypeBadge type={player.type} />
                               <button
                                 type="button"
-                                className="min-h-9 rounded-lg px-2 text-xs font-bold text-brand-700 hover:bg-brand-50"
+                                className="action-icon-button text-brand-700 hover:bg-brand-50"
                                 aria-label={`${player.name} 선수 정보 수정`}
                                 onClick={(event) => {
                                   event.preventDefault();
@@ -1855,7 +2106,7 @@ function App() {
                                   editPlayer(player);
                                 }}
                               >
-                                수정
+                                <ActionIcon name="edit" className="size-4" />
                               </button>
                             </div>
                           );
@@ -2011,7 +2262,7 @@ function App() {
                       <select
                         value={formationId}
                         onChange={(event) => setFormationId(event.target.value)}
-                        className="min-h-11 rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                        className="h-12 rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
                       >
                         {formations.map((formation) => (
                           <option key={formation.id} value={formation.id}>
@@ -2171,7 +2422,7 @@ function App() {
                   <select
                     value={newPlayerPositions[0] ?? ''}
                     onChange={(event) => updateMainPosition(event.target.value)}
-                    className="min-h-11 rounded-xl border border-line bg-surface px-3 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                    className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
                     required
                   >
                     <option value="">메인 포지션 선택</option>
@@ -2197,7 +2448,7 @@ function App() {
                       newPlayerPositions[0] === '포지션 상관없음' ||
                       newPlayerPositions.length >= 6
                     }
-                    className="min-h-11 rounded-xl border border-line bg-surface px-3 outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
+                    className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
                   >
                     <option value="">서브 포지션 추가</option>
                     {positions
@@ -2243,30 +2494,6 @@ function App() {
           </section>
         </div>
       )}
-      <nav className="bottom-navigation" aria-label="주요 메뉴">
-        {(
-          [
-            { to: '/team-info', label: '팀 정보', icon: '▤' },
-            { to: '/', label: '전술보드', icon: '⚽' },
-            { to: '/team', label: '팀원 관리', icon: '♙' },
-            { to: '/stats', label: '스탯 관리', icon: '▥' },
-          ] as const
-        ).map(({ to, label, icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              `bottom-navigation-item ${isActive ? 'is-active' : ''}`
-            }
-          >
-            <span className="bottom-navigation-icon" aria-hidden="true">
-              {icon}
-            </span>
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
     </main>
   );
 }

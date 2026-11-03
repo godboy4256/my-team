@@ -1,1 +1,9 @@
-export { Button, Card, Centered, PageContainer, TextInput } from './ui';
+export {
+  ActionIcon,
+  AutoGrowTextarea,
+  Button,
+  Card,
+  Centered,
+  PageContainer,
+  TextInput,
+} from './ui';

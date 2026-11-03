@@ -65,6 +65,8 @@
   --type-label: clamp(0.75rem, 0.71rem + 0.12vw, 0.875rem);
   --type-title: clamp(1rem, 0.92rem + 0.35vw, 1.375rem);
   --type-display: clamp(1.25rem, 1.05rem + 0.8vw, 1.75rem);
+  --navigation-height: 4.25rem;
+  --navigation-gap: 1rem;
 }
 
 * {
@@ -106,6 +108,14 @@ a {
   transition-timing-function: var(--motion-ease-standard);
 }
 
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 ::selection {
   color: var(--color-brand-900);
   background: var(--color-brand-100);
@@ -133,13 +143,101 @@ a {
   background: var(--color-surface);
 }
 
+.team-info-editor {
+  display: flex;
+  width: min(100%, 36rem);
+  max-height: min(88dvh, 52rem);
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.team-info-editor > h2 {
+  flex: 0 0 auto;
+  padding: 1.25rem 1.25rem 0;
+}
+
+.team-info-editor .team-info-form {
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.team-info-editor .team-info-form > * {
+  min-width: 0;
+}
+
+.team-info-editor .team-info-form input,
+.team-info-editor .team-info-form textarea {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.team-info-editor .team-info-form input[type='checkbox'] {
+  width: 1rem;
+  flex: 0 0 1rem;
+}
+
+.team-info-editor .team-info-form input[type='file'] {
+  overflow: hidden;
+  font-size: var(--type-label);
+}
+
+.team-info-editor .team-info-form > div:last-child {
+  position: sticky;
+  bottom: -1.25rem;
+  margin: 0 -1.25rem -1.25rem;
+  border-top: 1px solid var(--color-line);
+  background: var(--color-surface);
+  padding: 0.75rem 1.25rem max(0.75rem, env(safe-area-inset-bottom));
+}
+
 .notice-bar {
   position: fixed;
-  top: 3.5rem;
-  right: 0;
-  left: 0;
-  z-index: 30;
-  font-size: var(--type-label);
+  z-index: 70;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(
+    var(--navigation-height) + var(--navigation-gap) +
+      env(safe-area-inset-bottom)
+  );
+  left: max(1rem, env(safe-area-inset-left));
+  width: fit-content;
+  max-width: min(34rem, calc(100vw - 2rem));
+  min-height: 3.75rem;
+  margin: 0 auto;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 1rem;
+  background: rgb(22 26 24 / 88%);
+  padding: 0.9rem 1.25rem;
+  color: white;
+  font-size: var(--type-body);
+  line-height: 1.5;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 22%);
+  backdrop-filter: blur(12px);
+  animation: notice-enter var(--motion-duration-panel) var(--motion-ease-enter)
+    both;
+}
+
+.notice-bar button {
+  cursor: pointer;
+  color: rgb(255 255 255 / 72%);
+}
+
+.notice-bar button:hover {
+  color: white;
+}
+
+@keyframes notice-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .board-area {
@@ -354,12 +452,57 @@ a {
   left: 0;
   z-index: 40;
   display: grid;
-  min-height: 4.25rem;
+  min-height: var(--navigation-height);
   flex: 0 0 auto;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--color-line);
   background: var(--color-surface);
   padding: 0.35rem 0.35rem max(0.35rem, env(safe-area-inset-bottom));
+}
+
+.player-add-fab {
+  position: fixed;
+  z-index: 41;
+  right: max(1.25rem, env(safe-area-inset-right));
+  bottom: calc(var(--navigation-height) + 1rem + env(safe-area-inset-bottom));
+  display: grid;
+  width: 3.5rem;
+  height: 3.5rem;
+  place-items: center;
+  cursor: pointer;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-brand-700);
+  color: white;
+  box-shadow: 0 8px 24px rgb(18 72 50 / 28%);
+  transition:
+    transform var(--motion-duration-fast) var(--motion-ease-standard),
+    background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.player-add-fab:hover {
+  transform: translateY(-2px);
+  background: var(--color-brand-800);
+}
+
+.player-add-fab span {
+  margin-top: -0.2rem;
+  font-size: 2.25rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.action-icon-button {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 2.5rem;
+  place-items: center;
+  cursor: pointer;
+  border-radius: 0.75rem;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .bottom-navigation-item {
@@ -738,6 +881,36 @@ a {
     max-height: min(84vh, 52rem);
     border-radius: 1.25rem;
     padding-bottom: 1rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  .modal-backdrop:has(.team-info-editor) {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .team-info-editor {
+    width: 100%;
+    max-width: 100%;
+    max-height: min(90dvh, 52rem);
+    border-radius: 1.25rem 1.25rem 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .team-info-editor > h2 {
+    padding: 1rem 1rem 0;
+  }
+
+  .team-info-editor .team-info-form {
+    gap: 0.875rem;
+    padding: 1rem;
+  }
+
+  .team-info-editor .team-info-form > div:last-child {
+    bottom: -1rem;
+    margin: 0 -1rem -1rem;
+    padding: 0.75rem 1rem max(0.75rem, env(safe-area-inset-bottom));
   }
 }
 

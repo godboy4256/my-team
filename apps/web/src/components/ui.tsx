@@ -36,7 +36,7 @@ export function Button({
       type={type}
       className={[
         'inline-flex items-center justify-center gap-2 rounded-xl',
-        'font-bold transition-colors',
+        'cursor-pointer font-bold transition-colors',
         'focus-visible:outline-none focus-visible:ring-2',
         'focus-visible:ring-offset-2',
         'disabled:pointer-events-none disabled:opacity-50',
@@ -45,6 +45,74 @@ export function Button({
         className,
       ].join(' ')}
       {...props}
+    />
+  );
+}
+
+export function ActionIcon({
+  name,
+  className = '',
+}: {
+  name: 'edit' | 'trash';
+  className?: string;
+}) {
+  return name === 'edit' ? (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" />
+    </svg>
+  ) : (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="m19 6-1 14H6L5 6" />
+      <path d="M10 11v5M14 11v5" />
+    </svg>
+  );
+}
+
+export function AutoGrowTextarea({
+  className = '',
+  onInput,
+  ...props
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      onInput={(event) => {
+        const textarea = event.currentTarget;
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 192)}px`;
+        textarea.style.overflowY =
+          textarea.scrollHeight > 192 ? 'auto' : 'hidden';
+        onInput?.(event);
+      }}
+      className={[
+        'min-h-12 w-full rounded-xl border border-line bg-surface px-4 py-3',
+        'text-base text-ink outline-none transition-colors',
+        'placeholder:text-ink-faint focus:border-brand-600',
+        'focus:ring-4 focus:ring-brand-100',
+        'resize-none overflow-y-hidden',
+        className,
+      ].join(' ')}
     />
   );
 }
@@ -75,8 +143,8 @@ export function TextInput({
       <input
         id={inputId}
         className={[
-          'min-h-12 w-full rounded-xl border bg-surface px-4',
-          'text-base text-ink outline-none transition',
+          'h-12 w-full rounded-xl border bg-surface px-4',
+          'text-base text-ink outline-none transition-colors',
           'placeholder:text-ink-faint focus:border-brand-600',
           'focus:ring-4 focus:ring-brand-100',
           error ? 'border-danger' : 'border-line',
