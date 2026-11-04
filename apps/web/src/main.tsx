@@ -12,6 +12,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/team-info" element={<App />} />
         <Route path="/team" element={<App />} />
         <Route path="/stats" element={<App />} />
+        <Route path="/players/:playerId" element={<App />} />
+        <Route path="/players/:playerId/evaluate" element={<App />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

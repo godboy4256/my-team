@@ -5,5 +5,6 @@ export {
   Card,
   Centered,
   PageContainer,
+  SelectChevron,
   TextInput,
 } from './ui';

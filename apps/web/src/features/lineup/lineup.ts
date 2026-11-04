@@ -35,6 +35,7 @@ export type Position = (typeof positions)[number] | FormationPosition;
 export type Player = {
   id: string;
   name: string;
+  jerseyNumber?: number | null;
   birthYear: number;
   preferredPositions: Position[];
   type: 'member' | 'guest';

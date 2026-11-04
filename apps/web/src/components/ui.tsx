@@ -89,6 +89,25 @@ export function ActionIcon({
   );
 }
 
+export function SelectChevron() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 20 20"
+      fill="none"
+      className="select-chevron"
+    >
+      <path
+        d="m5.5 7.5 4.5 4.5 4.5-4.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function AutoGrowTextarea({
   className = '',
   onInput,

@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { FormEvent } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { ActionIcon, AutoGrowTextarea, Button, TextInput } from './components';
+import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import {
+  ActionIcon,
+  AutoGrowTextarea,
+  Button,
+  SelectChevron,
+  TextInput,
+} from './components';
 import {
   createLineups,
   detectFormationLabel,
@@ -17,12 +24,18 @@ import type {
   Position,
   QuarterLineup,
 } from './features/lineup/lineup';
+import {
+  evaluationGroups,
+  evaluationQuestions,
+} from './features/stats/evaluation';
+import type { PlayerEvaluation } from './features/stats/evaluation';
 
 const STORAGE_KEY = 'my-team-lineup-v1';
 const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
 const SECOND_TEAM_LINEUP_STORAGE_KEY = 'my-team-lineups-team-b-v1';
 const SETUP_STORAGE_KEY = 'my-team-setup-v1';
 const TEAM_INFO_STORAGE_KEY = 'my-team-info-v1';
+const PLAYER_EVALUATIONS_API = '/api/player-evaluations';
 
 type TeamInfo = {
   name: string;
@@ -237,6 +250,106 @@ function PlayerTypeBadge({ type }: { type: Player['type'] }) {
   );
 }
 
+function getMainPositionMark(position: Position | undefined) {
+  if (!position) {
+    return { label: '선수', icon: 'midfield', theme: 'player-mark-midfield' };
+  }
+  if (position === 'GK' || position === '골키퍼') {
+    return {
+      label: '골키퍼',
+      icon: 'goalkeeper',
+      theme: 'player-mark-goalkeeper',
+    };
+  }
+  if (
+    [
+      '센터백',
+      '사이드백',
+      '왼쪽 센터백',
+      '오른쪽 센터백',
+      '오른쪽 사이드백',
+      '왼쪽 사이드백',
+    ].includes(position)
+  ) {
+    return { label: '수비수', icon: 'defender', theme: 'player-mark-defender' };
+  }
+  if (
+    [
+      '미드필더',
+      '수비형 미드필더',
+      '중앙 수비형 미드필더',
+      '왼쪽 수비형 미드필더',
+      '오른쪽 수비형 미드필더',
+      '중앙 미드필더',
+      '왼쪽 미드필더',
+      '오른쪽 미드필더',
+    ].includes(position)
+  ) {
+    return {
+      label: '미드필더',
+      icon: 'midfield',
+      theme: 'player-mark-midfield',
+    };
+  }
+  if (position === '포지션 상관없음') {
+    return {
+      label: '멀티 플레이어',
+      icon: 'midfield',
+      theme: 'player-mark-midfield',
+    };
+  }
+  return { label: '공격수', icon: 'forward', theme: 'player-mark-forward' };
+}
+
+function MainPositionMark({ position }: { position: Position | undefined }) {
+  const { label, icon, theme } = getMainPositionMark(position);
+  return (
+    <span
+      className={`main-position-mark ${theme}`}
+      aria-label={`메인 포지션 ${label}`}
+      title={label}
+    >
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="main-position-icon"
+      >
+        {icon === 'goalkeeper' && (
+          <>
+            <path d="M7 4.5 4.5 6 3.8 11c-.2 1.4.8 2.7 2.2 2.9l2.1.3.9-3.1 1.2 1.2 1.2-1.2.9 3.1 2.1-.3c1.4-.2 2.4-1.5 2.2-2.9L16 6l-2.5-1.5-1.5 2h-3z" />
+            <path d="m8.5 7 1.5 2 1.5-2" />
+            <path d="M8 14.2v3.3c0 1.1.9 2 2 2h4" />
+          </>
+        )}
+        {icon === 'defender' && (
+          <>
+            <path d="M12 3.2 19 6v5.1c0 4.5-2.9 7.9-7 9.7-4.1-1.8-7-5.2-7-9.7V6z" />
+            <path d="m8.5 12 2.2 2.2 4.8-5" />
+          </>
+        )}
+        {icon === 'midfield' && (
+          <>
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M3.8 9h4.4l2.4 3-1.5 4.5M20.2 9h-4.4l-2.4 3 1.5 4.5M10.6 3.8l1.4 3.7 3.8 1.5" />
+          </>
+        )}
+        {icon === 'forward' && (
+          <>
+            <path d="M4 17.5 10.5 11 14 14.5 20 8.5" />
+            <path d="M13.5 8.5H20V15" />
+            <path d="M4 20h16" />
+          </>
+        )}
+      </svg>
+    </span>
+  );
+}
+
 function normalizeStoredPlayers(value: unknown): Player[] {
   if (!Array.isArray(value)) return [];
 
@@ -263,7 +376,16 @@ function normalizeStoredPlayers(value: unknown): Player[] {
     ) {
       return [];
     }
-    return [{ ...player, birthYear, preferredPositions } as Player];
+    const jerseyNumber =
+      typeof player.jerseyNumber === 'number' &&
+      Number.isInteger(player.jerseyNumber) &&
+      player.jerseyNumber >= 0 &&
+      player.jerseyNumber <= 99
+        ? player.jerseyNumber
+        : null;
+    return [
+      { ...player, jerseyNumber, birthYear, preferredPositions } as Player,
+    ];
   });
 }
 
@@ -312,6 +434,7 @@ function readStoredState(): StoredState {
 function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { playerId } = useParams<{ playerId: string }>();
   const initialState = useMemo(readStoredState, []);
   const initialSetup = useMemo(readStoredSetup, []);
   const initialAttendees = initialState.players.filter(({ id }) =>
@@ -319,6 +442,9 @@ function App() {
   );
   const defaultScrimmageTeams = splitScrimmagePlayers(initialAttendees);
   const [players, setPlayers] = useState<Player[]>(initialState.players);
+  const [playerEvaluations, setPlayerEvaluations] = useState<
+    Record<string, PlayerEvaluation>
+  >({});
   const [isSampleData, setIsSampleData] = useState(initialState.isSampleData);
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>(
     initialState.selectedPlayerIds,
@@ -424,6 +550,7 @@ function App() {
   >('menu');
   const [attendeeSearch, setAttendeeSearch] = useState('');
   const [newPlayerName, setNewPlayerName] = useState('');
+  const [newPlayerJerseyNumber, setNewPlayerJerseyNumber] = useState('');
   const [newPlayerBirthYear, setNewPlayerBirthYear] = useState('');
   const [newPlayerPositions, setNewPlayerPositions] = useState<Position[]>([]);
   const [newSubPositionDraft, setNewSubPositionDraft] = useState('');
@@ -433,6 +560,7 @@ function App() {
   const [isTeamInfoEditorOpen, setIsTeamInfoEditorOpen] = useState(false);
   const [teamInfoDraft, setTeamInfoDraft] = useState<TeamInfo>(teamInfo);
   const [playerSearch, setPlayerSearch] = useState('');
+  const [playerSort, setPlayerSort] = useState<'name' | 'jersey'>('name');
   useEffect(() => {
     if (!notice) return;
     const timeoutId = window.setTimeout(() => setNotice(''), 3200);
@@ -459,16 +587,102 @@ function App() {
   const isTeamInfoPage = location.pathname === '/team-info';
   const isStatsPage = location.pathname === '/stats';
   const isBoardPage = location.pathname === '/';
+  const isPlayerDetailPage =
+    Boolean(playerId) && location.pathname.startsWith('/players/');
+  const isPlayerEvaluationPage = location.pathname.endsWith('/evaluate');
+  const selectedDetailPlayer = players.find(({ id }) => id === playerId);
+  const editingEvaluation = playerId ? playerEvaluations[playerId] : undefined;
+  const [evaluationScores, setEvaluationScores] = useState<
+    Record<string, number>
+  >({});
 
   useEffect(() => {
-    document.title = isTeamManagementPage
-      ? '팀원 관리 | MYTEAM'
-      : isTeamInfoPage
-        ? '팀 정보 | MYTEAM'
-        : isStatsPage
-          ? '스탯 관리 | MYTEAM'
-          : 'MYTEAM';
-  }, [isStatsPage, isTeamInfoPage, isTeamManagementPage]);
+    if (!isTeamManagementPage && !isPlayerDetailPage) return;
+    let isActive = true;
+    fetch(PLAYER_EVALUATIONS_API)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('평가 정보를 불러오지 못했습니다.');
+        const payload: unknown = await response.json();
+        if (!Array.isArray(payload)) return {};
+        return Object.fromEntries(
+          payload.flatMap((entry): [string, PlayerEvaluation][] => {
+            if (
+              typeof entry !== 'object' ||
+              entry === null ||
+              !('playerId' in entry) ||
+              typeof entry.playerId !== 'string' ||
+              !('scores' in entry) ||
+              typeof entry.scores !== 'object' ||
+              entry.scores === null
+            )
+              return [];
+            const scores: Record<string, number> = {};
+            for (const [key, score] of Object.entries(entry.scores)) {
+              if (
+                evaluationQuestions.some((question) => question.id === key) &&
+                typeof score === 'number' &&
+                Number.isInteger(score) &&
+                score >= 1 &&
+                score <= 5
+              ) {
+                scores[key] = score;
+              }
+            }
+            return [
+              [
+                entry.playerId,
+                {
+                  playerId: entry.playerId,
+                  scores,
+                  updatedAt:
+                    'updatedAt' in entry && typeof entry.updatedAt === 'string'
+                      ? entry.updatedAt
+                      : '',
+                },
+              ],
+            ];
+          }),
+        );
+      })
+      .then((evaluations) => {
+        if (isActive) setPlayerEvaluations(evaluations);
+      })
+      .catch(() => {
+        if (isActive)
+          setNotice(
+            '평가 정보를 불러오지 못했습니다. API와 데이터베이스 연결을 확인해 주세요.',
+          );
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [isPlayerDetailPage, isTeamManagementPage]);
+
+  useEffect(() => {
+    if (isPlayerEvaluationPage && editingEvaluation) {
+      setEvaluationScores(editingEvaluation.scores as Record<string, number>);
+    } else if (!isPlayerEvaluationPage) {
+      setEvaluationScores({});
+    }
+  }, [editingEvaluation, isPlayerEvaluationPage]);
+
+  useEffect(() => {
+    document.title = isPlayerDetailPage
+      ? `${selectedDetailPlayer?.name ?? '선수'} 상세 | MYTEAM`
+      : isTeamManagementPage
+        ? '팀원 관리 | MYTEAM'
+        : isTeamInfoPage
+          ? '팀 정보 | MYTEAM'
+          : isStatsPage
+            ? '팀 기록 | MYTEAM'
+            : 'MYTEAM';
+  }, [
+    isStatsPage,
+    isTeamInfoPage,
+    isTeamManagementPage,
+    isPlayerDetailPage,
+    selectedDetailPlayer?.name,
+  ]);
 
   function navigateTo(path: '/' | '/team-info' | '/team' | '/stats') {
     navigate(path);
@@ -769,10 +983,21 @@ function App() {
     event.preventDefault();
     const name = newPlayerName.trim();
     const birthYear = Number(newPlayerBirthYear);
+    const jerseyNumber = newPlayerJerseyNumber.trim()
+      ? Number(newPlayerJerseyNumber)
+      : null;
     const age = getPlayerAge(birthYear);
 
     if (!name || !Number.isInteger(birthYear) || age < 15 || age > 90) {
       setNotice('이름과 15~90세에 해당하는 출생 연도를 입력해 주세요.');
+      return;
+    }
+
+    if (
+      jerseyNumber !== null &&
+      (!Number.isInteger(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99)
+    ) {
+      setNotice('등번호는 0~99 사이 숫자로 입력해 주세요.');
       return;
     }
 
@@ -784,6 +1009,7 @@ function App() {
     const player: Player = {
       id: editingPlayerId ?? crypto.randomUUID(),
       name,
+      jerseyNumber,
       birthYear,
       preferredPositions: newPlayerPositions,
       type: newPlayerType,
@@ -816,6 +1042,7 @@ function App() {
       }
     }
     setNewPlayerName('');
+    setNewPlayerJerseyNumber('');
     setNewPlayerBirthYear('');
     setNewPlayerPositions([]);
     setNewSubPositionDraft('');
@@ -834,6 +1061,9 @@ function App() {
     setEditingPlayerId(player.id);
     setPlayerFormSource('menu');
     setNewPlayerName(player.name);
+    setNewPlayerJerseyNumber(
+      player.jerseyNumber == null ? '' : String(player.jerseyNumber),
+    );
     setNewPlayerBirthYear(String(player.birthYear));
     setNewPlayerPositions(player.preferredPositions);
     setNewSubPositionDraft('');
@@ -845,6 +1075,7 @@ function App() {
     setIsAddingPlayer(false);
     setEditingPlayerId(null);
     setNewPlayerName('');
+    setNewPlayerJerseyNumber('');
     setNewPlayerBirthYear('');
     setNewPlayerPositions([]);
     setNewSubPositionDraft('');
@@ -868,6 +1099,16 @@ function App() {
     setTeamBPlayerIds((current) =>
       current.filter((id) => id !== deletingPlayerId),
     );
+    setPlayerEvaluations((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([id]) => id !== deletingPlayerId),
+      ),
+    );
+    void fetch(`${PLAYER_EVALUATIONS_API}/${deletingPlayerId}`, {
+      method: 'DELETE',
+    }).catch(() => {
+      setNotice('선수 평가 기록을 서버에서 삭제하지 못했습니다.');
+    });
     const clearPlayerFromLineups = (current: QuarterLineup[]) =>
       current.map((quarter) => ({
         ...quarter,
@@ -881,7 +1122,55 @@ function App() {
     setSecondTeamLineups(clearPlayerFromLineups);
     setIsSampleData(false);
     setDeletingPlayerId(null);
+    if (deletingPlayerId === playerId) navigate('/team');
     setNotice(`${deletedPlayer.name} 선수를 팀에서 삭제했습니다.`);
+  }
+
+  async function savePlayerEvaluation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!playerId || !selectedDetailPlayer) return;
+    const answeredCount = evaluationQuestions.filter(
+      ({ id }) => evaluationScores[id] !== undefined,
+    ).length;
+    if (answeredCount !== evaluationQuestions.length) {
+      setNotice(
+        `평가 항목 ${evaluationQuestions.length - answeredCount}개가 남아 있습니다.`,
+      );
+      return;
+    }
+    try {
+      const response = await fetch(`${PLAYER_EVALUATIONS_API}/${playerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scores: evaluationScores }),
+      });
+      if (!response.ok) throw new Error('평가 저장에 실패했습니다.');
+      const saved: unknown = await response.json();
+      if (typeof saved !== 'object' || saved === null || !('scores' in saved)) {
+        throw new Error('저장된 평가 응답이 올바르지 않습니다.');
+      }
+      const savedScores = saved.scores;
+      if (typeof savedScores !== 'object' || savedScores === null) {
+        throw new Error('저장된 평가 점수가 올바르지 않습니다.');
+      }
+      setPlayerEvaluations((current) => ({
+        ...current,
+        [playerId]: {
+          playerId,
+          scores: savedScores as Record<string, number>,
+          updatedAt:
+            'updatedAt' in saved && typeof saved.updatedAt === 'string'
+              ? saved.updatedAt
+              : new Date().toISOString(),
+        },
+      }));
+      navigate(`/players/${playerId}`);
+      setNotice(`${selectedDetailPlayer.name} 선수 평가를 저장했습니다.`);
+    } catch {
+      setNotice(
+        '평가를 저장하지 못했습니다. API와 데이터베이스 연결을 확인해 주세요.',
+      );
+    }
   }
 
   function clearPitchLineup() {
@@ -1155,19 +1444,48 @@ function App() {
       {isTeamManagementPage && (
         <section className="team-management-page styled-scrollbar">
           <div className="team-page-content">
-            <TextInput
-              label="선수 검색"
-              name="teamPlayerSearch"
-              type="search"
-              value={playerSearch}
-              onChange={(event) => setPlayerSearch(event.target.value)}
-              placeholder="이름으로 선수를 검색해 주세요"
-            />
-            {players.filter(({ name }) =>
-              name
-                .toLocaleLowerCase('ko-KR')
-                .includes(playerSearch.trim().toLocaleLowerCase('ko-KR')),
-            ).length === 0 ? (
+            <div>
+              <h1 className="text-xl font-black">팀 관리</h1>
+              <p className="mt-1 text-sm text-ink-muted">
+                선수 정보를 보고 평가표를 작성할 수 있어요.
+              </p>
+            </div>
+            <div className="flex items-end gap-1.5">
+              <TextInput
+                label="선수 검색"
+                name="teamPlayerSearch"
+                type="search"
+                className="min-w-0"
+                value={playerSearch}
+                onChange={(event) => setPlayerSearch(event.target.value)}
+                placeholder="이름, 등번호, 포지션 검색"
+              />
+              <label className="sort-select-control">
+                <span className="sr-only">선수 정렬</span>
+                <select
+                  aria-label="선수 목록 정렬"
+                  value={playerSort}
+                  onChange={(event) =>
+                    setPlayerSort(event.target.value as 'name' | 'jersey')
+                  }
+                  className="sort-select"
+                >
+                  <option value="name">이름순</option>
+                  <option value="jersey">등번호순</option>
+                </select>
+                <SelectChevron />
+              </label>
+            </div>
+            {players.filter((player) => {
+              const query = playerSearch.trim().toLocaleLowerCase('ko-KR');
+              return [
+                player.name,
+                player.jerseyNumber == null ? '' : String(player.jerseyNumber),
+                ...player.preferredPositions,
+              ].some((value) =>
+                value.toLocaleLowerCase('ko-KR').includes(query),
+              );
+            }).length === 0 ? (
               <p className="rounded-2xl bg-surface-subtle p-5 text-center text-sm text-ink-muted">
                 {players.length === 0
                   ? '등록된 팀원이 없습니다.'
@@ -1176,21 +1494,54 @@ function App() {
             ) : (
               <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
                 {players
-                  .filter(({ name }) =>
-                    name
-                      .toLocaleLowerCase('ko-KR')
-                      .includes(playerSearch.trim().toLocaleLowerCase('ko-KR')),
+                  .filter((player) => {
+                    const query = playerSearch
+                      .trim()
+                      .toLocaleLowerCase('ko-KR');
+                    return [
+                      player.name,
+                      player.jerseyNumber == null
+                        ? ''
+                        : String(player.jerseyNumber),
+                      ...player.preferredPositions,
+                    ].some((value) =>
+                      value.toLocaleLowerCase('ko-KR').includes(query),
+                    );
+                  })
+                  .sort((first, second) =>
+                    playerSort === 'jersey'
+                      ? (first.jerseyNumber ?? Number.MAX_SAFE_INTEGER) -
+                        (second.jerseyNumber ?? Number.MAX_SAFE_INTEGER)
+                      : first.name.localeCompare(second.name, 'ko-KR'),
                   )
                   .map((player) => (
                     <div
                       key={player.id}
-                      className="flex min-h-16 items-center gap-3 px-4 py-3"
+                      className="team-player-row flex min-h-16 items-center gap-3 px-4 py-3"
+                      role="link"
+                      tabIndex={0}
+                      aria-label={`${player.name} 선수 자세히 보기`}
+                      onClick={() => navigate(`/players/${player.id}`)}
+                      onKeyDown={(event) => {
+                        if (
+                          event.target === event.currentTarget &&
+                          (event.key === 'Enter' || event.key === ' ')
+                        ) {
+                          event.preventDefault();
+                          navigate(`/players/${player.id}`);
+                        }
+                      }}
                     >
-                      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-brand-100 font-extrabold text-brand-800">
-                        {player.name.slice(0, 1)}
-                      </span>
+                      <MainPositionMark
+                        position={player.preferredPositions[0]}
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-bold">
+                          {player.jerseyNumber != null && (
+                            <span className="mr-1.5 text-brand-700">
+                              #{player.jerseyNumber}
+                            </span>
+                          )}
                           {player.name}
                           <span className="ml-2 text-xs font-medium text-ink-faint">
                             {player.birthYear}년생 · 만{' '}
@@ -1207,9 +1558,33 @@ function App() {
                       <div className="flex shrink-0 items-center gap-1">
                         <button
                           type="button"
+                          className="action-icon-button text-ink-muted hover:bg-surface-subtle"
+                          aria-label={`${player.name} 선수 자세히 보기`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            navigate(`/players/${player.id}`);
+                          }}
+                        >
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            className="size-4"
+                          >
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 11v5m0-8h.01" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
                           className="action-icon-button text-brand-700 hover:bg-brand-50"
                           aria-label={`${player.name} 선수 수정`}
-                          onClick={() => editPlayer(player)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            editPlayer(player);
+                          }}
                         >
                           <ActionIcon name="edit" className="size-4" />
                         </button>
@@ -1217,7 +1592,10 @@ function App() {
                           type="button"
                           className="action-icon-button text-danger hover:bg-red-50"
                           aria-label={`${player.name} 선수 삭제`}
-                          onClick={() => setDeletingPlayerId(player.id)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setDeletingPlayerId(player.id);
+                          }}
                         >
                           <ActionIcon name="trash" className="size-4" />
                         </button>
@@ -1230,9 +1608,293 @@ function App() {
         </section>
       )}
 
+      {isPlayerDetailPage &&
+        selectedDetailPlayer &&
+        !isPlayerEvaluationPage && (
+          <section className="team-management-page styled-scrollbar">
+            <div className="team-page-content player-detail-content">
+              <button
+                type="button"
+                className="text-left text-sm font-bold text-ink-muted"
+                onClick={() => navigate('/team')}
+              >
+                ← 팀 관리
+              </button>
+              <article className="player-profile-card">
+                <div className="player-profile-topline">
+                  <span
+                    className="player-profile-avatar"
+                    aria-label={`${selectedDetailPlayer.name} 프로필 이미지 자리`}
+                  >
+                    {selectedDetailPlayer.name.slice(0, 1)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {selectedDetailPlayer.jerseyNumber != null && (
+                      <span className="player-profile-number">
+                        #{selectedDetailPlayer.jerseyNumber}
+                      </span>
+                    )}
+                    <h1 className="player-profile-name">
+                      {selectedDetailPlayer.name}
+                    </h1>
+                  </div>
+                  <MainPositionMark
+                    position={selectedDetailPlayer.preferredPositions[0]}
+                  />
+                </div>
+                <div className="player-profile-meta">
+                  <span>{selectedDetailPlayer.birthYear}년생</span>
+                  <span>
+                    만 {getPlayerAge(selectedDetailPlayer.birthYear)}세
+                  </span>
+                  <PlayerTypeBadge type={selectedDetailPlayer.type} />
+                  <span className="player-main-position">
+                    메인 포지션{' '}
+                    <strong>
+                      {selectedDetailPlayer.preferredPositions[0] ?? '미등록'}
+                    </strong>
+                  </span>
+                </div>
+                {selectedDetailPlayer.preferredPositions.length > 1 && (
+                  <div className="player-secondary-positions">
+                    <span>서브 포지션</span>
+                    {selectedDetailPlayer.preferredPositions
+                      .slice(1)
+                      .map((position) => (
+                        <span key={position} className="position-chip">
+                          {position}
+                        </span>
+                      ))}
+                  </div>
+                )}
+                <div className="player-profile-actions">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => editPlayer(selectedDetailPlayer)}
+                  >
+                    <ActionIcon name="edit" className="size-4" />
+                    정보 수정
+                  </Button>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    className="text-danger hover:bg-red-50"
+                    onClick={() => setDeletingPlayerId(selectedDetailPlayer.id)}
+                  >
+                    <ActionIcon name="trash" className="size-4" />
+                    선수 삭제
+                  </Button>
+                </div>
+              </article>
+              {editingEvaluation ? (
+                <section className="player-evaluation-summary">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-extrabold">선수 평가</h2>
+                      <p className="text-sm text-ink-muted">
+                        항목별 평가 점수와 영역 평균
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => navigate(`/players/${playerId}/evaluate`)}
+                    >
+                      평가 수정
+                    </Button>
+                  </div>
+                  {evaluationGroups.map((group) => {
+                    const questions = evaluationQuestions.filter(
+                      (question) => question.group === group,
+                    );
+                    const scores = questions.flatMap(
+                      ({ id }) => editingEvaluation.scores[id] ?? [],
+                    );
+                    const average = scores.length
+                      ? (
+                          scores.reduce((sum, score) => sum + score, 0) /
+                          scores.length
+                        ).toFixed(1)
+                      : '—';
+                    return (
+                      <div key={group} className="evaluation-group-summary">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-bold">{group}</h3>
+                          <span className="font-extrabold text-brand-800">
+                            {average}
+                            <span className="text-xs font-medium text-ink-muted">
+                              {' '}
+                              / 5
+                            </span>
+                          </span>
+                        </div>
+                        <dl className="mt-2 divide-y divide-line">
+                          {questions.map((question) => (
+                            <div
+                              key={question.id}
+                              className="flex items-center justify-between gap-3 py-2 text-sm"
+                            >
+                              <dt className="text-ink-muted">
+                                {question.label}
+                              </dt>
+                              <dd className="font-bold">
+                                {editingEvaluation.scores[question.id] ?? '—'}점
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    );
+                  })}
+                </section>
+              ) : (
+                <section className="player-evaluation-empty">
+                  <span
+                    className="grid size-12 place-items-center rounded-2xl bg-brand-50 text-2xl text-brand-700"
+                    aria-hidden="true"
+                  >
+                    ☆
+                  </span>
+                  <h2 className="mt-3 text-lg font-extrabold">
+                    아직 선수 평가가 필요해요
+                  </h2>
+                  <p className="mt-1 text-sm text-ink-muted">
+                    15개 항목의 문항을 선택해 {selectedDetailPlayer.name} 선수의
+                    스탯을 기록해 보세요.
+                  </p>
+                  <Button
+                    className="mt-5"
+                    onClick={() => navigate(`/players/${playerId}/evaluate`)}
+                  >
+                    선수 평가하기
+                  </Button>
+                </section>
+              )}
+            </div>
+          </section>
+        )}
+
+      {isPlayerEvaluationPage && selectedDetailPlayer && (
+        <section className="team-management-page styled-scrollbar">
+          <div className="team-page-content evaluation-form-content">
+            <button
+              type="button"
+              className="text-left text-sm font-bold text-ink-muted"
+              onClick={() => navigate(`/players/${playerId}`)}
+            >
+              ← 선수 상세
+            </button>
+            <div>
+              <h1 className="text-xl font-black">
+                {selectedDetailPlayer.name} 선수 평가
+              </h1>
+              <p className="mt-1 text-sm text-ink-muted">
+                가장 잘 맞는 설명을 항목마다 하나씩 선택해 주세요.
+              </p>
+            </div>
+            <div className="evaluation-progress" role="status">
+              {Object.keys(evaluationScores).length} /{' '}
+              {evaluationQuestions.length} 항목 선택
+            </div>
+            <form
+              id="player-evaluation-form"
+              onSubmit={savePlayerEvaluation}
+              className="grid gap-5"
+            >
+              {evaluationGroups.map((group) => (
+                <section key={group} className="evaluation-form-group">
+                  <h2 className="mb-3 text-lg font-extrabold">{group}</h2>
+                  {evaluationQuestions
+                    .filter((question) => question.group === group)
+                    .map((question) => (
+                      <fieldset
+                        key={question.id}
+                        className="evaluation-question"
+                      >
+                        <legend className="font-bold">{question.label}</legend>
+                        <p className="mt-1 text-sm text-ink-muted">
+                          {question.prompt}
+                        </p>
+                        <div className="mt-3 grid gap-2">
+                          {question.options.map((option, optionIndex) => {
+                            const score = 5 - optionIndex;
+                            return (
+                              <label
+                                key={option}
+                                className={`evaluation-option ${evaluationScores[question.id] === score ? 'is-selected' : ''}`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={question.id}
+                                  value={score}
+                                  checked={
+                                    evaluationScores[question.id] === score
+                                  }
+                                  onChange={() =>
+                                    setEvaluationScores((current) => ({
+                                      ...current,
+                                      [question.id]: score,
+                                    }))
+                                  }
+                                  required
+                                />
+                                <span className="evaluation-score">
+                                  {score}
+                                </span>
+                                <span>{option}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </fieldset>
+                    ))}
+                </section>
+              ))}
+            </form>
+          </div>
+        </section>
+      )}
+
+      {isPlayerEvaluationPage &&
+        selectedDetailPlayer &&
+        createPortal(
+          <div className="evaluation-submit-bar">
+            <Button
+              type="submit"
+              form="player-evaluation-form"
+              className="w-full"
+            >
+              평가 저장하기
+            </Button>
+          </div>,
+          document.body,
+        )}
+
       {isTeamInfoPage && (
         <section className="team-management-page styled-scrollbar">
           <div className="team-page-content team-info-content">
+            <section className="team-home-overview">
+              <div>
+                <p className="text-sm font-semibold text-ink-muted">팀 홈</p>
+                <h1 className="mt-1 text-xl font-black">우리 팀 한눈에 보기</h1>
+              </div>
+              <div className="team-home-count">
+                <strong>{players.length}</strong>
+                <span>등록 선수</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => navigate('/team')}>
+                  선수·평가표 보기
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => navigate('/')}
+                >
+                  전술보드 열기
+                </Button>
+              </div>
+            </section>
             <div className="team-info-heading">
               <span className="team-info-emblem" aria-hidden="true">
                 {teamInfo.logoDataUrl ? (
@@ -1495,7 +2157,16 @@ function App() {
         </div>
       )}
       {isStatsPage && (
-        <section className="team-management-page" aria-label="스탯 관리" />
+        <section className="team-management-page" aria-label="팀 기록">
+          <div className="team-page-content">
+            <div className="player-evaluation-empty">
+              <h1 className="text-xl font-black">팀 기록</h1>
+              <p className="mt-2 text-sm text-ink-muted">
+                경기별 기록 기능은 준비 중입니다.
+              </p>
+            </div>
+          </div>
+        </section>
       )}
 
       {deletingPlayerId && (
@@ -1538,10 +2209,10 @@ function App() {
       <nav className="bottom-navigation" aria-label="주요 메뉴">
         {(
           [
-            { to: '/team-info', label: '팀 정보', icon: '▤' },
+            { to: '/team-info', label: '홈', icon: '⌂' },
             { to: '/', label: '전술보드', icon: '⚽' },
-            { to: '/team', label: '팀원 관리', icon: '♙' },
-            { to: '/stats', label: '스탯 관리', icon: '▥' },
+            { to: '/team', label: '팀 관리', icon: '♙' },
+            { to: '/stats', label: '팀 기록', icon: '▤' },
           ] as const
         ).map(({ to, label, icon }) => (
           <NavLink
@@ -2259,17 +2930,22 @@ function App() {
                       {formationMode === 'same'
                         ? '모든 쿼터 포메이션'
                         : '시작 포메이션 (쿼터마다 순환)'}
-                      <select
-                        value={formationId}
-                        onChange={(event) => setFormationId(event.target.value)}
-                        className="h-12 rounded-xl border border-line bg-surface px-3 text-sm font-semibold outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
-                      >
-                        {formations.map((formation) => (
-                          <option key={formation.id} value={formation.id}>
-                            {formation.label} · {formation.description}
-                          </option>
-                        ))}
-                      </select>
+                      <span className="select-control">
+                        <select
+                          value={formationId}
+                          onChange={(event) =>
+                            setFormationId(event.target.value)
+                          }
+                          className="h-12 w-full rounded-xl border border-line bg-surface pl-3 pr-11 text-sm font-semibold outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                        >
+                          {formations.map((formation) => (
+                            <option key={formation.id} value={formation.id}>
+                              {formation.label} · {formation.description}
+                            </option>
+                          ))}
+                        </select>
+                        <SelectChevron />
+                      </span>
                     </label>
                   )}
 
@@ -2394,6 +3070,18 @@ function App() {
                   required
                 />
               </div>
+              <TextInput
+                label="등번호 (선택)"
+                name="playerJerseyNumber"
+                type="number"
+                min={0}
+                max={99}
+                value={newPlayerJerseyNumber}
+                onChange={(event) =>
+                  setNewPlayerJerseyNumber(event.target.value)
+                }
+                placeholder="예: 10"
+              />
               {playerFormSource === 'attendees' && !editingPlayerId ? (
                 <p className="rounded-xl bg-brand-50 px-3 py-2 text-sm font-bold text-brand-800">
                   오늘 참석 용병으로 등록됩니다.
@@ -2419,50 +3107,58 @@ function App() {
               <div className="grid gap-3">
                 <label className="grid gap-1.5 text-sm font-semibold">
                   메인 포지션
-                  <select
-                    value={newPlayerPositions[0] ?? ''}
-                    onChange={(event) => updateMainPosition(event.target.value)}
-                    className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
-                    required
-                  >
-                    <option value="">메인 포지션 선택</option>
-                    {positions.map((position) => (
-                      <option key={position} value={position}>
-                        {position}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="select-control">
+                    <select
+                      value={newPlayerPositions[0] ?? ''}
+                      onChange={(event) =>
+                        updateMainPosition(event.target.value)
+                      }
+                      className="h-12 w-full rounded-xl border border-line bg-surface pl-4 pr-11 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100"
+                      required
+                    >
+                      <option value="">메인 포지션 선택</option>
+                      {positions.map((position) => (
+                        <option key={position} value={position}>
+                          {position}
+                        </option>
+                      ))}
+                    </select>
+                    <SelectChevron />
+                  </span>
                 </label>
                 <label className="grid gap-1.5 text-sm font-semibold">
                   서브 포지션{' '}
                   <span className="font-normal text-ink-faint">
                     {Math.max(0, newPlayerPositions.length - 1)} / 5개 선택
                   </span>
-                  <select
-                    value={newSubPositionDraft}
-                    onChange={(event) =>
-                      addSecondaryPosition(event.target.value)
-                    }
-                    disabled={
-                      !newPlayerPositions[0] ||
-                      newPlayerPositions[0] === '포지션 상관없음' ||
-                      newPlayerPositions.length >= 6
-                    }
-                    className="h-12 rounded-xl border border-line bg-surface px-3 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
-                  >
-                    <option value="">서브 포지션 추가</option>
-                    {positions
-                      .filter((position) => position !== '포지션 상관없음')
-                      .map((position) => (
-                        <option
-                          key={position}
-                          value={position}
-                          disabled={newPlayerPositions.includes(position)}
-                        >
-                          {position}
-                        </option>
-                      ))}
-                  </select>
+                  <span className="select-control">
+                    <select
+                      value={newSubPositionDraft}
+                      onChange={(event) =>
+                        addSecondaryPosition(event.target.value)
+                      }
+                      disabled={
+                        !newPlayerPositions[0] ||
+                        newPlayerPositions[0] === '포지션 상관없음' ||
+                        newPlayerPositions.length >= 6
+                      }
+                      className="h-12 w-full rounded-xl border border-line bg-surface pl-4 pr-11 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
+                    >
+                      <option value="">서브 포지션 추가</option>
+                      {positions
+                        .filter((position) => position !== '포지션 상관없음')
+                        .map((position) => (
+                          <option
+                            key={position}
+                            value={position}
+                            disabled={newPlayerPositions.includes(position)}
+                          >
+                            {position}
+                          </option>
+                        ))}
+                    </select>
+                    <SelectChevron />
+                  </span>
                 </label>
                 {newPlayerPositions.length > 1 && (
                   <div className="flex flex-wrap gap-2">
