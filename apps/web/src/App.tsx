@@ -13,7 +13,6 @@ import {
 import {
   createLineups,
   detectFormationLabel,
-  demoPlayers,
   formations,
   getFormationPlayerCoordinates,
   positions,
@@ -29,16 +28,16 @@ import {
   evaluationQuestions,
 } from './features/stats/evaluation';
 import type { PlayerEvaluation } from './features/stats/evaluation';
+import AccessPages from './features/account/AccessPages';
 
-const STORAGE_KEY = 'my-team-lineup-v1';
 const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
 const SECOND_TEAM_LINEUP_STORAGE_KEY = 'my-team-lineups-team-b-v1';
 const SETUP_STORAGE_KEY = 'my-team-setup-v1';
-const TEAM_INFO_STORAGE_KEY = 'my-team-info-v1';
 const PLAYER_EVALUATIONS_API = '/api/player-evaluations';
 
 type TeamInfo = {
   name: string;
+  inviteCode: string;
   homeTown: string;
   homeGround: string;
   description: string;
@@ -52,6 +51,7 @@ type TeamInfo = {
 
 const emptyTeamInfo: TeamInfo = {
   name: '',
+  inviteCode: '',
   homeTown: '',
   homeGround: '',
   description: '',
@@ -61,38 +61,6 @@ const emptyTeamInfo: TeamInfo = {
   competitions: '',
   emblem: '⚽',
   logoDataUrl: '',
-};
-
-function readTeamInfo(): TeamInfo {
-  try {
-    const value = localStorage.getItem(TEAM_INFO_STORAGE_KEY);
-    if (!value) return emptyTeamInfo;
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed !== 'object' || parsed === null) return emptyTeamInfo;
-    const info = parsed as Partial<TeamInfo>;
-    return {
-      name: typeof info.name === 'string' ? info.name : '',
-      homeTown: typeof info.homeTown === 'string' ? info.homeTown : '',
-      homeGround: typeof info.homeGround === 'string' ? info.homeGround : '',
-      description: typeof info.description === 'string' ? info.description : '',
-      foundedAt: typeof info.foundedAt === 'string' ? info.foundedAt : '',
-      activityTime:
-        typeof info.activityTime === 'string' ? info.activityTime : '',
-      kfaRegistered: info.kfaRegistered === true,
-      competitions:
-        typeof info.competitions === 'string' ? info.competitions : '',
-      emblem: typeof info.emblem === 'string' ? info.emblem : '⚽',
-      logoDataUrl: typeof info.logoDataUrl === 'string' ? info.logoDataUrl : '',
-    };
-  } catch {
-    return emptyTeamInfo;
-  }
-}
-
-type StoredState = {
-  players: Player[];
-  selectedPlayerIds: string[];
-  isSampleData: boolean;
 };
 
 type SetupStep = 1 | 2 | 3;
@@ -126,9 +94,15 @@ const defaultSetup: StoredSetup = {
   hasTeamAssignments: false,
 };
 
-function readStoredSetup(): StoredSetup {
+function teamStorageKey(key: string, teamId: string) {
+  return `${key}:${teamId}`;
+}
+
+function readStoredSetup(teamId: string): StoredSetup {
   try {
-    const value = localStorage.getItem(SETUP_STORAGE_KEY);
+    const value = localStorage.getItem(
+      teamStorageKey(SETUP_STORAGE_KEY, teamId),
+    );
     if (!value) return defaultSetup;
 
     const parsed: unknown = JSON.parse(value);
@@ -389,66 +363,20 @@ function normalizeStoredPlayers(value: unknown): Player[] {
   });
 }
 
-function readStoredState(): StoredState {
-  try {
-    const value = localStorage.getItem(STORAGE_KEY);
-
-    if (value) {
-      const parsed: unknown = JSON.parse(value);
-
-      if (
-        typeof parsed === 'object' &&
-        parsed !== null &&
-        'players' in parsed &&
-        'selectedPlayerIds' in parsed &&
-        Array.isArray(parsed.players) &&
-        Array.isArray(parsed.selectedPlayerIds)
-      ) {
-        const savedPlayers = normalizeStoredPlayers(parsed.players);
-        const isDemoRoster =
-          savedPlayers.length === demoPlayers.length &&
-          savedPlayers.every(
-            (player, index) => player.id === demoPlayers[index]?.id,
-          );
-
-        return {
-          players: savedPlayers,
-          selectedPlayerIds: parsed.selectedPlayerIds as string[],
-          isSampleData:
-            ('isSampleData' in parsed && parsed.isSampleData === true) ||
-            isDemoRoster,
-        };
-      }
-    }
-  } catch {
-    // 브라우저 저장소를 사용할 수 없는 경우 예시 명단으로 시작합니다.
-  }
-
-  return {
-    players: normalizeStoredPlayers(demoPlayers),
-    selectedPlayerIds: demoPlayers.map(({ id }) => id),
-    isSampleData: true,
-  };
-}
-
-function App() {
+function TeamApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const { playerId } = useParams<{ playerId: string }>();
-  const initialState = useMemo(readStoredState, []);
-  const initialSetup = useMemo(readStoredSetup, []);
-  const initialAttendees = initialState.players.filter(({ id }) =>
-    initialState.selectedPlayerIds.includes(id),
+  const activeTeamId = sessionStorage.getItem('my-team-active-team');
+  const initialSetup = useMemo(
+    () => readStoredSetup(activeTeamId ?? 'none'),
+    [activeTeamId],
   );
-  const defaultScrimmageTeams = splitScrimmagePlayers(initialAttendees);
-  const [players, setPlayers] = useState<Player[]>(initialState.players);
+  const [players, setPlayers] = useState<Player[]>([]);
   const [playerEvaluations, setPlayerEvaluations] = useState<
     Record<string, PlayerEvaluation>
   >({});
-  const [isSampleData, setIsSampleData] = useState(initialState.isSampleData);
-  const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>(
-    initialState.selectedPlayerIds,
-  );
+  const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [quarterCount, setQuarterCount] = useState(initialSetup.quarterCount);
   const [quarterCountInput, setQuarterCountInput] = useState(
     String(initialSetup.quarterCount),
@@ -469,7 +397,9 @@ function App() {
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [lineups, setLineups] = useState<QuarterLineup[]>(() => {
     try {
-      const stored = localStorage.getItem(LINEUP_STORAGE_KEY);
+      const stored = localStorage.getItem(
+        teamStorageKey(LINEUP_STORAGE_KEY, activeTeamId ?? 'none'),
+      );
       if (stored) {
         const parsed: unknown = JSON.parse(stored);
         if (Array.isArray(parsed)) {
@@ -480,25 +410,17 @@ function App() {
       // 오래되었거나 깨진 전술보드는 새 초기 배치로 교체합니다.
     }
 
-    const initialPlayers =
-      initialSetup.matchMode === 'scrimmage'
-        ? defaultScrimmageTeams.teamA
-        : initialAttendees;
-    return initialPlayers.length
-      ? createLineups({
-          players: initialPlayers,
-          quarterCount: initialSetup.quarterCount,
-          mode: initialSetup.formationMode,
-          formationId: initialSetup.formationId,
-          minimumQuarters: initialSetup.minimumQuarters,
-          isVerticalPitch: window.matchMedia('(max-width: 47.999rem)').matches,
-        })
-      : [];
+    return [];
   });
   const [secondTeamLineups, setSecondTeamLineups] = useState<QuarterLineup[]>(
     () => {
       try {
-        const stored = localStorage.getItem(SECOND_TEAM_LINEUP_STORAGE_KEY);
+        const stored = localStorage.getItem(
+          teamStorageKey(
+            SECOND_TEAM_LINEUP_STORAGE_KEY,
+            activeTeamId ?? 'none',
+          ),
+        );
         if (stored) {
           const parsed: unknown = JSON.parse(stored);
           if (Array.isArray(parsed)) return parsed as QuarterLineup[];
@@ -506,32 +428,17 @@ function App() {
       } catch {
         // 저장 데이터가 손상된 경우 자체전 두 번째 팀은 비워 둡니다.
       }
-      return initialSetup.matchMode === 'scrimmage' &&
-        defaultScrimmageTeams.teamB.length > 0
-        ? createLineups({
-            players: defaultScrimmageTeams.teamB,
-            quarterCount: initialSetup.quarterCount,
-            mode: initialSetup.formationMode,
-            formationId: initialSetup.formationId,
-            minimumQuarters: initialSetup.minimumQuarters,
-            isVerticalPitch: window.matchMedia('(max-width: 47.999rem)')
-              .matches,
-          })
-        : [];
+      return [];
     },
   );
   const [activeTeam, setActiveTeam] = useState<'A' | 'B'>(
     initialSetup.activeTeam,
   );
   const [teamAPlayerIds, setTeamAPlayerIds] = useState<string[]>(
-    initialSetup.hasTeamAssignments
-      ? initialSetup.teamAPlayerIds
-      : defaultScrimmageTeams.teamA.map(({ id }) => id),
+    initialSetup.hasTeamAssignments ? initialSetup.teamAPlayerIds : [],
   );
   const [teamBPlayerIds, setTeamBPlayerIds] = useState<string[]>(
-    initialSetup.hasTeamAssignments
-      ? initialSetup.teamBPlayerIds
-      : defaultScrimmageTeams.teamB.map(({ id }) => id),
+    initialSetup.hasTeamAssignments ? initialSetup.teamBPlayerIds : [],
   );
   const [activeQuarter, setActiveQuarter] = useState(
     initialSetup.activeQuarter,
@@ -556,11 +463,16 @@ function App() {
   const [newSubPositionDraft, setNewSubPositionDraft] = useState('');
   const [newPlayerType, setNewPlayerType] = useState<Player['type']>('member');
   const [notice, setNotice] = useState('');
-  const [teamInfo, setTeamInfo] = useState<TeamInfo>(readTeamInfo);
+  const [isInviteCodeCopied, setIsInviteCodeCopied] = useState(false);
+  const [teamInfo, setTeamInfo] = useState<TeamInfo>(emptyTeamInfo);
   const [isTeamInfoEditorOpen, setIsTeamInfoEditorOpen] = useState(false);
   const [teamInfoDraft, setTeamInfoDraft] = useState<TeamInfo>(teamInfo);
   const [playerSearch, setPlayerSearch] = useState('');
   const [playerSort, setPlayerSort] = useState<'name' | 'jersey'>('name');
+  const [positionOptions, setPositionOptions] = useState<string[]>([
+    ...positions,
+  ]);
+  const [isRosterLoaded, setIsRosterLoaded] = useState(false);
   useEffect(() => {
     if (!notice) return;
     const timeoutId = window.setTimeout(() => setNotice(''), 3200);
@@ -586,7 +498,7 @@ function App() {
   const isTeamManagementPage = location.pathname === '/team';
   const isTeamInfoPage = location.pathname === '/team-info';
   const isStatsPage = location.pathname === '/stats';
-  const isBoardPage = location.pathname === '/';
+  const isBoardPage = location.pathname === '/board';
   const isPlayerDetailPage =
     Boolean(playerId) && location.pathname.startsWith('/players/');
   const isPlayerEvaluationPage = location.pathname.endsWith('/evaluate');
@@ -597,9 +509,152 @@ function App() {
   >({});
 
   useEffect(() => {
+    if (!activeTeamId) return;
+    fetch(`/api/teams/${activeTeamId}`, { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('팀 정보를 불러오지 못했습니다.');
+        const team = (await response.json()) as Partial<TeamInfo>;
+        const nextTeamInfo: TeamInfo = {
+          name: typeof team.name === 'string' ? team.name : '',
+          inviteCode:
+            typeof team.inviteCode === 'string' ? team.inviteCode : '',
+          homeTown: typeof team.homeTown === 'string' ? team.homeTown : '',
+          homeGround:
+            typeof team.homeGround === 'string' ? team.homeGround : '',
+          description:
+            typeof team.description === 'string' ? team.description : '',
+          foundedAt: typeof team.foundedAt === 'string' ? team.foundedAt : '',
+          activityTime:
+            typeof team.activityTime === 'string' ? team.activityTime : '',
+          kfaRegistered: team.kfaRegistered === true,
+          competitions:
+            typeof team.competitions === 'string' ? team.competitions : '',
+          emblem: typeof team.emblem === 'string' ? team.emblem : '⚽',
+          logoDataUrl:
+            typeof team.logoDataUrl === 'string' ? team.logoDataUrl : '',
+        };
+        setTeamInfo(nextTeamInfo);
+        setTeamInfoDraft(nextTeamInfo);
+      })
+      .catch(() => setNotice('팀 정보를 불러오지 못했습니다.'));
+  }, [activeTeamId]);
+
+  useEffect(() => {
+    let active = true;
+    async function verifyManager() {
+      try {
+        const response = await fetch('/api/auth/me', {
+          credentials: 'include',
+        });
+        if (!response.ok) {
+          navigate('/welcome', { replace: true });
+          return;
+        }
+        if (!activeTeamId) {
+          navigate('/teams', { replace: true });
+          return;
+        }
+        const teamsResponse = await fetch('/api/teams', {
+          credentials: 'include',
+        });
+        if (!teamsResponse.ok) {
+          navigate('/welcome', { replace: true });
+          return;
+        }
+        const teams: unknown = await teamsResponse.json();
+        const ownsTeam =
+          Array.isArray(teams) &&
+          teams.some(
+            (team) =>
+              typeof team === 'object' &&
+              team !== null &&
+              'id' in team &&
+              team.id === activeTeamId,
+          );
+        if (!ownsTeam) {
+          sessionStorage.removeItem('my-team-active-team');
+          navigate('/teams', { replace: true });
+        }
+      } catch {
+        if (active) setNotice('로그인 서버에 연결할 수 없습니다.');
+      }
+    }
+    void verifyManager();
+    return () => {
+      active = false;
+    };
+  }, [activeTeamId, navigate]);
+
+  useEffect(() => {
+    if (!activeTeamId) return;
+    let active = true;
+    fetch(`/api/teams/${activeTeamId}/players`, { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('선수 명단을 불러오지 못했습니다.');
+        const payload: unknown = await response.json();
+        return Array.isArray(payload) ? normalizeStoredPlayers(payload) : [];
+      })
+      .then((roster) => {
+        if (!active) return;
+        setPlayers(roster);
+        setSelectedPlayerIds((current) => {
+          const retained = current.filter((id) =>
+            roster.some((player) => player.id === id),
+          );
+          return retained.length > 0 ? retained : roster.map(({ id }) => id);
+        });
+        const teamSplit = splitScrimmagePlayers(roster);
+        setTeamAPlayerIds((current) => {
+          const retained = current.filter((id) =>
+            roster.some((player) => player.id === id),
+          );
+          return retained.length > 0
+            ? retained
+            : teamSplit.teamA.map(({ id }) => id);
+        });
+        setTeamBPlayerIds((current) => {
+          const retained = current.filter((id) =>
+            roster.some((player) => player.id === id),
+          );
+          return retained.length > 0
+            ? retained
+            : teamSplit.teamB.map(({ id }) => id);
+        });
+        setIsRosterLoaded(true);
+      })
+      .catch(() => {
+        if (active) {
+          setIsRosterLoaded(true);
+          setNotice('선수 명단을 불러오지 못했습니다. 다시 로그인해 주세요.');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTeamId]);
+
+  useEffect(() => {
+    fetch('/api/positions')
+      .then((response) => (response.ok ? response.json() : []))
+      .then((payload: unknown) => {
+        if (!Array.isArray(payload)) return;
+        const labels = payload.flatMap((item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          'label' in item &&
+          typeof item.label === 'string'
+            ? [item.label]
+            : [],
+        );
+        if (labels.length > 0) setPositionOptions(labels);
+      })
+      .catch(() => setNotice('포지션 정보를 불러오지 못했습니다.'));
+  }, []);
+
+  useEffect(() => {
     if (!isTeamManagementPage && !isPlayerDetailPage) return;
     let isActive = true;
-    fetch(PLAYER_EVALUATIONS_API)
+    fetch(PLAYER_EVALUATIONS_API, { credentials: 'include' })
       .then(async (response) => {
         if (!response.ok) throw new Error('평가 정보를 불러오지 못했습니다.');
         const payload: unknown = await response.json();
@@ -684,8 +739,19 @@ function App() {
     selectedDetailPlayer?.name,
   ]);
 
-  function navigateTo(path: '/' | '/team-info' | '/team' | '/stats') {
+  function navigateTo(path: '/board' | '/team-info' | '/team' | '/stats') {
     navigate(path);
+  }
+
+  async function copyTeamInviteCode() {
+    if (!teamInfo.inviteCode) return;
+    try {
+      await navigator.clipboard.writeText(teamInfo.inviteCode);
+      setIsInviteCodeCopied(true);
+      window.setTimeout(() => setIsInviteCodeCopied(false), 1800);
+    } catch {
+      setNotice('팀 코드를 복사하지 못했습니다. 코드를 직접 선택해 주세요.');
+    }
   }
 
   function handleSheetPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -734,14 +800,21 @@ function App() {
     }
   }
 
-  function saveTeamInfo(event: FormEvent<HTMLFormElement>) {
+  async function saveTeamInfo(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
-      localStorage.setItem(
-        TEAM_INFO_STORAGE_KEY,
-        JSON.stringify(teamInfoDraft),
-      );
-      setTeamInfo(teamInfoDraft);
+      if (!activeTeamId) throw new Error('선택된 팀이 없습니다.');
+      const response = await fetch(`/api/teams/${activeTeamId}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(teamInfoDraft),
+      });
+      if (!response.ok) throw new Error('팀 정보 저장에 실패했습니다.');
+      const savedTeam = (await response.json()) as Partial<TeamInfo>;
+      const nextTeamInfo = { ...teamInfoDraft, ...savedTeam };
+      setTeamInfo(nextTeamInfo);
+      setTeamInfoDraft(nextTeamInfo);
       setIsTeamInfoEditorOpen(false);
       setNotice('팀 정보를 저장했습니다.');
     } catch {
@@ -800,39 +873,29 @@ function App() {
   useEffect(() => {
     try {
       localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ players, selectedPlayerIds, isSampleData }),
+        teamStorageKey(LINEUP_STORAGE_KEY, activeTeamId ?? 'none'),
+        JSON.stringify(lineups),
       );
-    } catch {
-      setNotice(
-        '브라우저에 저장할 수 없어 현재 화면에서만 변경사항을 유지합니다.',
-      );
-    }
-  }, [players, selectedPlayerIds, isSampleData]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LINEUP_STORAGE_KEY, JSON.stringify(lineups));
     } catch {
       setNotice('전술판 위치를 저장하지 못했습니다.');
     }
-  }, [lineups]);
+  }, [activeTeamId, lineups]);
 
   useEffect(() => {
     try {
       localStorage.setItem(
-        SECOND_TEAM_LINEUP_STORAGE_KEY,
+        teamStorageKey(SECOND_TEAM_LINEUP_STORAGE_KEY, activeTeamId ?? 'none'),
         JSON.stringify(secondTeamLineups),
       );
     } catch {
       setNotice('자체전 두 번째 팀의 전술판 위치를 저장하지 못했습니다.');
     }
-  }, [secondTeamLineups]);
+  }, [activeTeamId, secondTeamLineups]);
 
   useEffect(() => {
     try {
       localStorage.setItem(
-        SETUP_STORAGE_KEY,
+        teamStorageKey(SETUP_STORAGE_KEY, activeTeamId ?? 'none'),
         JSON.stringify({
           quarterCount,
           minimumQuarters,
@@ -853,6 +916,7 @@ function App() {
   }, [
     activeQuarter,
     activeTeam,
+    activeTeamId,
     formationId,
     formationMode,
     lineupCreationMode,
@@ -979,7 +1043,7 @@ function App() {
     );
   }
 
-  function addPlayer(event: FormEvent<HTMLFormElement>) {
+  async function addPlayer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = newPlayerName.trim();
     const birthYear = Number(newPlayerBirthYear);
@@ -1006,40 +1070,62 @@ function App() {
       return;
     }
 
-    const player: Player = {
-      id: editingPlayerId ?? crypto.randomUUID(),
+    if (!activeTeamId) {
+      setNotice('먼저 관리할 팀을 선택해 주세요.');
+      return;
+    }
+    const playerInput = {
       name,
       jerseyNumber,
       birthYear,
-      preferredPositions: newPlayerPositions,
+      positions: newPlayerPositions,
       type: newPlayerType,
     };
     const isEditingPlayer = editingPlayerId !== null;
-    const shouldReplaceSampleRoster =
-      !isEditingPlayer && isSampleData && playerFormSource === 'menu';
-
-    setPlayers((current) =>
-      shouldReplaceSampleRoster
-        ? [player]
-        : isEditingPlayer
+    try {
+      const response = await fetch(
+        `/api/teams/${activeTeamId}/players${isEditingPlayer ? `/${editingPlayerId}` : ''}`,
+        {
+          method: isEditingPlayer ? 'PUT' : 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(playerInput),
+        },
+      );
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
+        const message =
+          typeof body === 'object' &&
+          body !== null &&
+          'message' in body &&
+          typeof body.message === 'string'
+            ? body.message
+            : '선수 정보를 저장하지 못했습니다.';
+        throw new Error(message);
+      }
+      const player = (await response.json()) as Player;
+      setPlayers((current) =>
+        isEditingPlayer
           ? current.map((item) => (item.id === player.id ? player : item))
           : [...current, player],
-    );
-    setIsSampleData(shouldReplaceSampleRoster ? false : isSampleData);
-    if (!isEditingPlayer) {
-      setSelectedPlayerIds((current) =>
-        shouldReplaceSampleRoster ? [player.id] : [...current, player.id],
       );
-      if (shouldReplaceSampleRoster) {
-        setTeamAPlayerIds([player.id]);
-        setTeamBPlayerIds([]);
-      } else if (matchMode === 'scrimmage') {
-        if (teamAPlayerIds.length <= teamBPlayerIds.length) {
-          setTeamAPlayerIds((current) => [...current, player.id]);
-        } else {
-          setTeamBPlayerIds((current) => [...current, player.id]);
+      if (!isEditingPlayer) {
+        setSelectedPlayerIds((current) => [...current, player.id]);
+        if (matchMode === 'scrimmage') {
+          if (teamAPlayerIds.length <= teamBPlayerIds.length) {
+            setTeamAPlayerIds((current) => [...current, player.id]);
+          } else {
+            setTeamBPlayerIds((current) => [...current, player.id]);
+          }
         }
       }
+    } catch (caught) {
+      setNotice(
+        caught instanceof Error
+          ? caught.message
+          : '선수 정보를 저장하지 못했습니다.',
+      );
+      return;
     }
     setNewPlayerName('');
     setNewPlayerJerseyNumber('');
@@ -1082,10 +1168,25 @@ function App() {
     setNewPlayerType('member');
   }
 
-  function deletePlayer() {
+  async function deletePlayer() {
     if (!deletingPlayerId) return;
     const deletedPlayer = players.find(({ id }) => id === deletingPlayerId);
     if (!deletedPlayer) return;
+
+    if (!activeTeamId) {
+      setNotice('관리할 팀을 찾을 수 없습니다.');
+      return;
+    }
+    try {
+      const response = await fetch(
+        `/api/teams/${activeTeamId}/players/${deletingPlayerId}`,
+        { method: 'DELETE', credentials: 'include' },
+      );
+      if (!response.ok) throw new Error('선수를 삭제하지 못했습니다.');
+    } catch {
+      setNotice('선수를 삭제하지 못했습니다. 다시 시도해 주세요.');
+      return;
+    }
 
     setPlayers((current) =>
       current.filter(({ id }) => id !== deletingPlayerId),
@@ -1104,11 +1205,6 @@ function App() {
         Object.entries(current).filter(([id]) => id !== deletingPlayerId),
       ),
     );
-    void fetch(`${PLAYER_EVALUATIONS_API}/${deletingPlayerId}`, {
-      method: 'DELETE',
-    }).catch(() => {
-      setNotice('선수 평가 기록을 서버에서 삭제하지 못했습니다.');
-    });
     const clearPlayerFromLineups = (current: QuarterLineup[]) =>
       current.map((quarter) => ({
         ...quarter,
@@ -1120,7 +1216,6 @@ function App() {
       }));
     setLineups(clearPlayerFromLineups);
     setSecondTeamLineups(clearPlayerFromLineups);
-    setIsSampleData(false);
     setDeletingPlayerId(null);
     if (deletingPlayerId === playerId) navigate('/team');
     setNotice(`${deletedPlayer.name} 선수를 팀에서 삭제했습니다.`);
@@ -1141,6 +1236,7 @@ function App() {
     try {
       const response = await fetch(`${PLAYER_EVALUATIONS_API}/${playerId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scores: evaluationScores }),
       });
@@ -1386,7 +1482,7 @@ function App() {
       <header className="app-header flex items-center justify-between border-b border-line bg-surface px-3 sm:px-5">
         <a
           className="group flex items-center gap-2.5"
-          href="/"
+          href="/team-info"
           aria-label="MYTEAM 홈"
         >
           <span className="relative grid size-10 place-items-center overflow-hidden rounded-2xl bg-brand-800 text-white shadow-sm ring-1 ring-brand-900/10 transition-transform group-hover:-rotate-3">
@@ -1422,6 +1518,13 @@ function App() {
             MY<span className="text-brand-600">TEAM</span>
           </span>
         </a>
+        <button
+          type="button"
+          className="team-switch-button"
+          onClick={() => navigate('/teams', { state: { showTeamList: true } })}
+        >
+          팀 전환
+        </button>
       </header>
 
       {notice && (
@@ -1442,7 +1545,10 @@ function App() {
       )}
 
       {isTeamManagementPage && (
-        <section className="team-management-page styled-scrollbar">
+        <section
+          className="team-management-page styled-scrollbar"
+          aria-busy={!isRosterLoaded}
+        >
           <div className="team-page-content">
             <div>
               <h1 className="text-xl font-black">팀 관리</h1>
@@ -1895,6 +2001,44 @@ function App() {
                 </Button>
               </div>
             </section>
+            <section className="team-invite-card">
+              <div>
+                <p className="text-sm font-bold">선수용 팀 초대 코드</p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  선수는 이 코드와 팀 명단의 등번호로 본인 기록을 확인할 수
+                  있어요.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="team-invite-code-copy"
+                disabled={!teamInfo.inviteCode}
+                onClick={copyTeamInviteCode}
+                aria-label={
+                  isInviteCodeCopied
+                    ? '팀 초대 코드 복사 완료'
+                    : '팀 초대 코드 복사'
+                }
+                title="클릭해서 팀 코드를 복사"
+              >
+                <strong>{teamInfo.inviteCode || '불러오는 중…'}</strong>
+                <span className="team-invite-copy-mark" aria-hidden="true">
+                  {isInviteCodeCopied ? (
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <path d="m4 10 4 4 8-8" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <rect x="7" y="6" width="9" height="11" rx="1.5" />
+                      <path d="M13 6V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v9A1.5 1.5 0 0 0 4.5 15H7" />
+                    </svg>
+                  )}
+                </span>
+                <span className="sr-only" aria-live="polite">
+                  {isInviteCodeCopied ? '복사 완료' : ''}
+                </span>
+              </button>
+            </section>
             <div className="team-info-heading">
               <span className="team-info-emblem" aria-hidden="true">
                 {teamInfo.logoDataUrl ? (
@@ -2210,7 +2354,7 @@ function App() {
         {(
           [
             { to: '/team-info', label: '홈', icon: '⌂' },
-            { to: '/', label: '전술보드', icon: '⚽' },
+            { to: '/board', label: '전술보드', icon: '⚽' },
             { to: '/team', label: '팀 관리', icon: '♙' },
             { to: '/stats', label: '팀 기록', icon: '▤' },
           ] as const
@@ -2218,7 +2362,7 @@ function App() {
           <NavLink
             key={to}
             to={to}
-            end={to === '/'}
+            end={to === '/board'}
             className={({ isActive }) =>
               `bottom-navigation-item ${isActive ? 'is-active' : ''}`
             }
@@ -2796,12 +2940,6 @@ function App() {
                       )}
                     </div>
                   )}
-                  {isSampleData && players.length > 0 && (
-                    <p className="text-xs text-ink-faint">
-                      예시 선수 명단입니다. 필요한 선수를 수정하거나 오늘
-                      참석자에서 제외할 수 있어요.
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -3117,7 +3255,7 @@ function App() {
                       required
                     >
                       <option value="">메인 포지션 선택</option>
-                      {positions.map((position) => (
+                      {positionOptions.map((position) => (
                         <option key={position} value={position}>
                           {position}
                         </option>
@@ -3145,13 +3283,15 @@ function App() {
                       className="h-12 w-full rounded-xl border border-line bg-surface pl-4 pr-11 outline-none transition-colors focus:border-brand-600 focus:ring-4 focus:ring-brand-100 disabled:bg-surface-subtle disabled:text-ink-faint"
                     >
                       <option value="">서브 포지션 추가</option>
-                      {positions
+                      {positionOptions
                         .filter((position) => position !== '포지션 상관없음')
                         .map((position) => (
                           <option
                             key={position}
                             value={position}
-                            disabled={newPlayerPositions.includes(position)}
+                            disabled={newPlayerPositions.includes(
+                              position as Position,
+                            )}
                           >
                             {position}
                           </option>
@@ -3194,4 +3334,19 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  const { pathname } = useLocation();
+  if (
+    pathname === '/' ||
+    pathname === '/welcome' ||
+    pathname === '/login' ||
+    pathname === '/signup' ||
+    pathname === '/teams' ||
+    pathname === '/teams/new' ||
+    pathname === '/join' ||
+    pathname === '/my-stats'
+  ) {
+    return <AccessPages />;
+  }
+  return <TeamApp />;
+}

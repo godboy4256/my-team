@@ -9,12 +9,20 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App />} />
+        <Route path="/welcome" element={<App />} />
+        <Route path="/login" element={<App />} />
+        <Route path="/signup" element={<App />} />
+        <Route path="/teams" element={<App />} />
+        <Route path="/teams/new" element={<App />} />
+        <Route path="/join" element={<App />} />
+        <Route path="/my-stats" element={<App />} />
         <Route path="/team-info" element={<App />} />
+        <Route path="/board" element={<App />} />
         <Route path="/team" element={<App />} />
         <Route path="/stats" element={<App />} />
         <Route path="/players/:playerId" element={<App />} />
         <Route path="/players/:playerId/evaluate" element={<App />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/welcome" replace />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>,

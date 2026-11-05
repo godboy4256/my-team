@@ -6,8 +6,12 @@ import {
   Get,
   Param,
   Put,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
 import { PlayerEvaluationsService } from './player-evaluations.service';
+import { AuthGuard } from '../auth/auth.service';
+import type { AuthenticatedRequest } from '../auth/auth.service';
 
 function parseScores(value: unknown): Record<string, number> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -34,25 +38,43 @@ export class PlayerEvaluationsController {
   constructor(private readonly service: PlayerEvaluationsService) {}
 
   @Get()
-  findAll() {
-    return this.service.findAll();
+  @UseGuards(AuthGuard)
+  findAll(@Req() request: AuthenticatedRequest) {
+    return this.service.findAll(request.user.id);
   }
 
   @Get(':playerId')
-  findOne(@Param('playerId') playerId: string) {
-    return this.service.findOne(playerId);
+  @UseGuards(AuthGuard)
+  findOne(
+    @Req() request: AuthenticatedRequest,
+    @Param('playerId') playerId: string,
+  ) {
+    return this.service.findOne(request.user.id, playerId);
   }
 
   @Put(':playerId')
-  upsert(@Param('playerId') playerId: string, @Body() body: unknown) {
+  @UseGuards(AuthGuard)
+  upsert(
+    @Req() request: AuthenticatedRequest,
+    @Param('playerId') playerId: string,
+    @Body() body: unknown,
+  ) {
     if (typeof body !== 'object' || body === null || !('scores' in body)) {
       throw new BadRequestException('scores 항목이 필요합니다.');
     }
-    return this.service.upsert(playerId, parseScores(body.scores));
+    return this.service.upsert(
+      request.user.id,
+      playerId,
+      parseScores(body.scores),
+    );
   }
 
   @Delete(':playerId')
-  remove(@Param('playerId') playerId: string) {
-    return this.service.remove(playerId);
+  @UseGuards(AuthGuard)
+  remove(
+    @Req() request: AuthenticatedRequest,
+    @Param('playerId') playerId: string,
+  ) {
+    return this.service.remove(request.user.id, playerId);
   }
 }
