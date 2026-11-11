@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Button, TextInput } from '../../components';
-import { evaluationGroups, evaluationQuestions } from '../stats/evaluation';
+import { fetchEvaluationQuestions } from '../stats/evaluation';
+import type { EvaluationQuestion } from '../stats/evaluation';
+import { StatGauge } from '../stats/StatGauge';
 
 type User = { id: string; name: string; age: number; username: string };
 type Team = {
@@ -512,6 +514,9 @@ function JoinTeamPage() {
 function MyStatsPage() {
   const navigate = useNavigate();
   const [memberView, setMemberView] = useState<MemberView | null>(null);
+  const [evaluationQuestions, setEvaluationQuestions] = useState<
+    EvaluationQuestion[]
+  >([]);
   const [isLoadingSavedPlayer, setIsLoadingSavedPlayer] = useState(true);
   const [inviteCode, setInviteCode] = useState('');
   const [jerseyNumber, setJerseyNumber] = useState('');
@@ -519,6 +524,13 @@ function MyStatsPage() {
 
   useEffect(() => {
     let active = true;
+    fetchEvaluationQuestions()
+      .then((questions) => {
+        if (active) setEvaluationQuestions(questions);
+      })
+      .catch(() => {
+        if (active) setError('평가 항목을 불러오지 못했습니다.');
+      });
     fetch('/api/teams/member/me', { credentials: 'include' })
       .then(async (response) => {
         if (!response.ok) return null;
@@ -668,36 +680,39 @@ function MyStatsPage() {
               </p>
             </div>
             {average !== null && (
-              <strong className="text-xl text-brand-800">
-                {average.toFixed(1)}
-                <span className="text-xs font-semibold"> / 5</span>
-              </strong>
+              <div className="member-overall-average">
+                <span>전체 평균</span>
+                <StatGauge score={Math.round(average)} />
+                <strong>{average.toFixed(1)}</strong>
+                <span>/ 5</span>
+              </div>
             )}
           </div>
           {!memberView.evaluation ? (
             <p className="member-empty-stats">
               아직 등록된 선수 평가가 없습니다.
             </p>
+          ) : evaluationQuestions.length === 0 ? (
+            <p className="access-error" role="alert">
+              {error || '평가 항목을 불러오는 중입니다.'}
+            </p>
           ) : (
-            evaluationGroups.map((group) => {
-              const questions = evaluationQuestions.filter(
-                (question) => question.group === group,
-              );
-              return (
-                <div key={group} className="member-stat-group">
-                  <h3>{group}</h3>
-                  {questions.map((question) => (
-                    <div key={question.id} className="member-stat-row">
-                      <span>{question.label}</span>
-                      <strong>
-                        {memberView.evaluation?.[question.id] ?? '—'}
-                        <small>점</small>
-                      </strong>
-                    </div>
-                  ))}
-                </div>
-              );
-            })
+            evaluationQuestions.map((question) => (
+              <div key={question.id} className="member-stat-row">
+                <span>{question.label}</span>
+                {memberView.evaluation?.[question.id] ? (
+                  <div className="member-stat-value">
+                    <StatGauge score={memberView.evaluation[question.id]} />
+                    <strong>
+                      {memberView.evaluation[question.id]}
+                      <small>점</small>
+                    </strong>
+                  </div>
+                ) : (
+                  <strong className="evaluation-result-missing">미평가</strong>
+                )}
+              </div>
+            ))
           )}
         </section>
         <Button

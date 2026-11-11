@@ -23,11 +23,12 @@ import type {
   Position,
   QuarterLineup,
 } from './features/lineup/lineup';
-import {
-  evaluationGroups,
-  evaluationQuestions,
+import { fetchEvaluationQuestions } from './features/stats/evaluation';
+import type {
+  EvaluationQuestion,
+  PlayerEvaluation,
 } from './features/stats/evaluation';
-import type { PlayerEvaluation } from './features/stats/evaluation';
+import { StatGauge } from './features/stats/StatGauge';
 import AccessPages from './features/account/AccessPages';
 
 const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
@@ -363,6 +364,30 @@ function normalizeStoredPlayers(value: unknown): Player[] {
   });
 }
 
+function EvaluationResultRow({
+  label,
+  score,
+}: {
+  label: string;
+  score: number | undefined;
+}) {
+  return (
+    <div className="evaluation-result-row">
+      <dt>{label}</dt>
+      {score === undefined ? (
+        <dd className="evaluation-result-missing">미평가</dd>
+      ) : (
+        <>
+          <dd>
+            <StatGauge score={score} />
+          </dd>
+          <dd className="evaluation-result-score">{score}점</dd>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TeamApp() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -376,6 +401,9 @@ function TeamApp() {
   const [playerEvaluations, setPlayerEvaluations] = useState<
     Record<string, PlayerEvaluation>
   >({});
+  const [evaluationQuestions, setEvaluationQuestions] = useState<
+    EvaluationQuestion[]
+  >([]);
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [quarterCount, setQuarterCount] = useState(initialSetup.quarterCount);
   const [quarterCountInput, setQuarterCountInput] = useState(
@@ -474,6 +502,19 @@ function TeamApp() {
   ]);
   const [isRosterLoaded, setIsRosterLoaded] = useState(false);
   useEffect(() => {
+    let isActive = true;
+    fetchEvaluationQuestions()
+      .then((questions) => {
+        if (isActive) setEvaluationQuestions(questions);
+      })
+      .catch(() => {
+        if (isActive) setNotice('평가 항목을 불러오지 못했습니다.');
+      });
+    return () => {
+      isActive = false;
+    };
+  }, []);
+  useEffect(() => {
     if (!notice) return;
     const timeoutId = window.setTimeout(() => setNotice(''), 3200);
     return () => window.clearTimeout(timeoutId);
@@ -504,6 +545,15 @@ function TeamApp() {
   const isPlayerEvaluationPage = location.pathname.endsWith('/evaluate');
   const selectedDetailPlayer = players.find(({ id }) => id === playerId);
   const editingEvaluation = playerId ? playerEvaluations[playerId] : undefined;
+  const evaluationScoreValues = editingEvaluation
+    ? evaluationQuestions.flatMap(
+        ({ id }) => editingEvaluation.scores[id] ?? [],
+      )
+    : [];
+  const evaluationAverage = evaluationScoreValues.length
+    ? evaluationScoreValues.reduce((sum, score) => sum + score, 0) /
+      evaluationScoreValues.length
+    : null;
   const [evaluationScores, setEvaluationScores] = useState<
     Record<string, number>
   >({});
@@ -652,7 +702,11 @@ function TeamApp() {
   }, []);
 
   useEffect(() => {
-    if (!isTeamManagementPage && !isPlayerDetailPage) return;
+    if (
+      evaluationQuestions.length === 0 ||
+      (!isTeamManagementPage && !isPlayerDetailPage)
+    )
+      return;
     let isActive = true;
     fetch(PLAYER_EVALUATIONS_API, { credentials: 'include' })
       .then(async (response) => {
@@ -711,7 +765,7 @@ function TeamApp() {
     return () => {
       isActive = false;
     };
-  }, [isPlayerDetailPage, isTeamManagementPage]);
+  }, [evaluationQuestions, isPlayerDetailPage, isTeamManagementPage]);
 
   useEffect(() => {
     if (isPlayerEvaluationPage && editingEvaluation) {
@@ -1224,6 +1278,10 @@ function TeamApp() {
   async function savePlayerEvaluation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!playerId || !selectedDetailPlayer) return;
+    if (evaluationQuestions.length === 0) {
+      setNotice('평가 항목을 불러온 뒤 다시 시도해 주세요.');
+      return;
+    }
     const answeredCount = evaluationQuestions.filter(
       ({ id }) => evaluationScores[id] !== undefined,
     ).length;
@@ -1266,6 +1324,29 @@ function TeamApp() {
       setNotice(
         '평가를 저장하지 못했습니다. API와 데이터베이스 연결을 확인해 주세요.',
       );
+    }
+  }
+
+  async function resetPlayerEvaluation() {
+    if (!playerId || !selectedDetailPlayer || !editingEvaluation) return;
+    const confirmed = window.confirm(
+      `${selectedDetailPlayer.name} 선수의 평가 기록을 삭제하고 다시 작성할까요?`,
+    );
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`${PLAYER_EVALUATIONS_API}/${playerId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('평가 기록 삭제에 실패했습니다.');
+      setPlayerEvaluations((current) => {
+        const next = { ...current };
+        delete next[playerId];
+        return next;
+      });
+      setNotice('평가 기록을 초기화했습니다. 새 평가를 작성할 수 있어요.');
+    } catch {
+      setNotice('평가 기록을 초기화하지 못했습니다. 다시 시도해 주세요.');
     }
   }
 
@@ -1798,60 +1879,43 @@ function TeamApp() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h2 className="text-lg font-extrabold">선수 평가</h2>
-                      <p className="text-sm text-ink-muted">
-                        항목별 평가 점수와 영역 평균
-                      </p>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => navigate(`/players/${playerId}/evaluate`)}
-                    >
-                      평가 수정
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          navigate(`/players/${playerId}/evaluate`)
+                        }
+                      >
+                        스탯 수정
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="quiet"
+                        className="text-danger hover:bg-red-50"
+                        onClick={() => void resetPlayerEvaluation()}
+                      >
+                        스탯 초기화
+                      </Button>
+                    </div>
                   </div>
-                  {evaluationGroups.map((group) => {
-                    const questions = evaluationQuestions.filter(
-                      (question) => question.group === group,
-                    );
-                    const scores = questions.flatMap(
-                      ({ id }) => editingEvaluation.scores[id] ?? [],
-                    );
-                    const average = scores.length
-                      ? (
-                          scores.reduce((sum, score) => sum + score, 0) /
-                          scores.length
-                        ).toFixed(1)
-                      : '—';
-                    return (
-                      <div key={group} className="evaluation-group-summary">
-                        <div className="flex items-center justify-between">
-                          <h3 className="font-bold">{group}</h3>
-                          <span className="font-extrabold text-brand-800">
-                            {average}
-                            <span className="text-xs font-medium text-ink-muted">
-                              {' '}
-                              / 5
-                            </span>
-                          </span>
-                        </div>
-                        <dl className="mt-2 divide-y divide-line">
-                          {questions.map((question) => (
-                            <div
-                              key={question.id}
-                              className="flex items-center justify-between gap-3 py-2 text-sm"
-                            >
-                              <dt className="text-ink-muted">
-                                {question.label}
-                              </dt>
-                              <dd className="font-bold">
-                                {editingEvaluation.scores[question.id] ?? '—'}점
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                      </div>
-                    );
-                  })}
+                  {evaluationAverage !== null && (
+                    <div className="evaluation-overall-average">
+                      <span>전체 평균</span>
+                      <StatGauge score={Math.round(evaluationAverage)} />
+                      <strong>{evaluationAverage.toFixed(1)}</strong>
+                      <span>/ 5</span>
+                    </div>
+                  )}
+                  <dl className="evaluation-result-list">
+                    {evaluationQuestions.map((question) => (
+                      <EvaluationResultRow
+                        key={question.id}
+                        label={question.label}
+                        score={editingEvaluation.scores[question.id]}
+                      />
+                    ))}
+                  </dl>
                 </section>
               ) : (
                 <section className="player-evaluation-empty">
@@ -1897,6 +1961,9 @@ function TeamApp() {
               <p className="mt-1 text-sm text-ink-muted">
                 가장 잘 맞는 설명을 항목마다 하나씩 선택해 주세요.
               </p>
+              <p className="evaluation-scale-hint">
+                점수가 높을수록 좋은 평가입니다.
+              </p>
             </div>
             <div className="evaluation-progress" role="status">
               {Object.keys(evaluationScores).length} /{' '}
@@ -1905,55 +1972,76 @@ function TeamApp() {
             <form
               id="player-evaluation-form"
               onSubmit={savePlayerEvaluation}
-              className="grid gap-5"
+              className="evaluation-question-list"
             >
-              {evaluationGroups.map((group) => (
-                <section key={group} className="evaluation-form-group">
-                  <h2 className="mb-3 text-lg font-extrabold">{group}</h2>
-                  {evaluationQuestions
-                    .filter((question) => question.group === group)
-                    .map((question) => (
-                      <fieldset
-                        key={question.id}
-                        className="evaluation-question"
-                      >
-                        <legend className="font-bold">{question.label}</legend>
-                        <p className="mt-1 text-sm text-ink-muted">
-                          {question.prompt}
-                        </p>
-                        <div className="mt-3 grid gap-2">
-                          {question.options.map((option, optionIndex) => {
-                            const score = 5 - optionIndex;
-                            return (
-                              <label
-                                key={option}
-                                className={`evaluation-option ${evaluationScores[question.id] === score ? 'is-selected' : ''}`}
-                              >
-                                <input
-                                  type="radio"
-                                  name={question.id}
-                                  value={score}
-                                  checked={
-                                    evaluationScores[question.id] === score
-                                  }
-                                  onChange={() =>
-                                    setEvaluationScores((current) => ({
-                                      ...current,
-                                      [question.id]: score,
-                                    }))
-                                  }
-                                  required
-                                />
-                                <span className="evaluation-score">
-                                  {score}
-                                </span>
-                                <span>{option}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </fieldset>
-                    ))}
+              {evaluationQuestions.map((question) => (
+                <section
+                  key={question.id}
+                  className="evaluation-question-block"
+                >
+                  <h2 className="evaluation-question-title">
+                    {question.label}
+                  </h2>
+                  <fieldset className="evaluation-question-table-card">
+                    <legend className="sr-only">{question.label}</legend>
+                    <table className="evaluation-option-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">점수</th>
+                          <th scope="col">평가 설명</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[1, 2, 3, 4, 5].map((score) => {
+                          const option = question.options.find(
+                            ({ score: optionScore }) => optionScore === score,
+                          );
+                          if (!option) return null;
+                          const inputId = `${question.id}-${score}`;
+                          const isSelected =
+                            evaluationScores[question.id] === score;
+                          return (
+                            <tr
+                              key={score}
+                              className={isSelected ? 'is-selected' : ''}
+                            >
+                              <td>
+                                <label
+                                  htmlFor={inputId}
+                                  className={`evaluation-option-score-cell score-tone-${score}`}
+                                >
+                                  <input
+                                    id={inputId}
+                                    type="radio"
+                                    name={question.id}
+                                    value={score}
+                                    aria-label={`${question.label}: ${score}점. ${option.description}`}
+                                    checked={isSelected}
+                                    onChange={() =>
+                                      setEvaluationScores((current) => ({
+                                        ...current,
+                                        [question.id]: score,
+                                      }))
+                                    }
+                                    required
+                                  />
+                                  <span>{score}</span>
+                                </label>
+                              </td>
+                              <td>
+                                <label
+                                  htmlFor={inputId}
+                                  className="evaluation-option-description-cell"
+                                >
+                                  {option.description}
+                                </label>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </fieldset>
                 </section>
               ))}
             </form>

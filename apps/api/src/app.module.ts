@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { PositionsModule } from './positions/positions.module';
 import { PlayerEvaluationsModule } from './player-evaluations/player-evaluations.module';
 import { TeamsModule } from './teams/teams.module';
+import { EvaluationQuestionsModule } from './evaluation-questions/evaluation-questions.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { TeamsModule } from './teams/teams.module';
     AuthModule,
     PositionsModule,
     TeamsModule,
+    EvaluationQuestionsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['../../.env', '.env'],

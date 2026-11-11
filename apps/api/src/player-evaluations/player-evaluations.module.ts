@@ -6,6 +6,7 @@ import { PlayerEvaluationsService } from './player-evaluations.service';
 import { TeamEntity } from '../teams/team.entity';
 import { TeamPlayerEntity } from '../players/team-player.entity';
 import { AuthModule } from '../auth/auth.module';
+import { EvaluationQuestionsModule } from '../evaluation-questions/evaluation-questions.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { AuthModule } from '../auth/auth.module';
       TeamEntity,
     ]),
     AuthModule,
+    EvaluationQuestionsModule,
   ],
   controllers: [PlayerEvaluationsController],
   providers: [PlayerEvaluationsService],

@@ -8,6 +8,7 @@ import { Repository } from 'typeorm';
 import { PlayerEvaluationEntity } from './player-evaluation.entity';
 import { TeamEntity } from '../teams/team.entity';
 import { TeamPlayerEntity } from '../players/team-player.entity';
+import { EvaluationQuestionsService } from '../evaluation-questions/evaluation-questions.service';
 
 @Injectable()
 export class PlayerEvaluationsService {
@@ -18,6 +19,7 @@ export class PlayerEvaluationsService {
     private readonly players: Repository<TeamPlayerEntity>,
     @InjectRepository(TeamEntity)
     private readonly teams: Repository<TeamEntity>,
+    private readonly questionDefinitions: EvaluationQuestionsService,
   ) {}
 
   async findAll(ownerUserId: string) {
@@ -48,6 +50,7 @@ export class PlayerEvaluationsService {
     scores: Record<string, number>,
   ) {
     await this.assertPlayerOwner(ownerUserId, playerId);
+    await this.questionDefinitions.assertScoresMatchActiveQuestions(scores);
     await this.evaluations.save({ playerId, scores });
     return this.findOne(ownerUserId, playerId);
   }
