@@ -6,6 +6,7 @@ import { PositionEntity } from '../positions/position.entity';
 import { TeamPlayerPositionEntity } from '../players/team-player-position.entity';
 import { TeamPlayerEntity } from '../players/team-player.entity';
 import { TeamEntity } from './team.entity';
+import { TeamTacticEntity } from './team-tactic.entity';
 import { TeamsController } from './teams.controller';
 import { TeamsService } from './teams.service';
 
@@ -14,6 +15,7 @@ import { TeamsService } from './teams.service';
     AuthModule,
     TypeOrmModule.forFeature([
       TeamEntity,
+      TeamTacticEntity,
       TeamPlayerEntity,
       TeamPlayerPositionEntity,
       PositionEntity,

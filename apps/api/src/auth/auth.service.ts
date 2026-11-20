@@ -14,7 +14,7 @@ import { Repository } from 'typeorm';
 import { UserEntity } from '../users/user.entity';
 
 const tokenLifetimeSeconds = 7 * 24 * 60 * 60;
-const playerTokenLifetimeSeconds = 10 * 365 * 24 * 60 * 60;
+export const viewerTokenLifetimeSeconds = 30 * 24 * 60 * 60;
 
 export type PublicUser = Pick<UserEntity, 'id' | 'name' | 'age' | 'username'>;
 
@@ -22,7 +22,8 @@ type JwtPayload = {
   sub: string;
   iat: number;
   exp: number;
-  role?: 'manager' | 'player';
+  role?: 'manager' | 'viewer';
+  teamId?: string;
 };
 
 @Injectable()
@@ -80,22 +81,22 @@ export class AuthService {
     return user ? this.toPublicUser(user) : null;
   }
 
-  createPlayerAccessToken(playerId: string) {
+  createTeamViewerAccessToken(teamId: string) {
     const issuedAt = Math.floor(Date.now() / 1000);
-    const expiresAt = new Date((issuedAt + playerTokenLifetimeSeconds) * 1000);
+    const expiresAt = new Date((issuedAt + viewerTokenLifetimeSeconds) * 1000);
     const token = this.signJwt({
-      sub: playerId,
+      sub: teamId,
       iat: issuedAt,
-      exp: issuedAt + playerTokenLifetimeSeconds,
-      role: 'player',
+      exp: issuedAt + viewerTokenLifetimeSeconds,
+      role: 'viewer',
     });
     return { token, expiresAt };
   }
 
-  findPlayerIdByAccessToken(token: string | undefined) {
+  findTeamIdByViewerAccessToken(token: string | undefined) {
     if (!token) return null;
     const payload = this.verifyJwt(token);
-    return payload?.role === 'player' ? payload.sub : null;
+    return payload?.role === 'viewer' ? payload.sub : null;
   }
 
   private createToken(user: UserEntity) {
@@ -160,7 +161,7 @@ export class AuthService {
         typeof payload.exp !== 'number' ||
         ('role' in payload &&
           payload.role !== 'manager' &&
-          payload.role !== 'player') ||
+          payload.role !== 'viewer') ||
         payload.exp <= Math.floor(Date.now() / 1000)
       ) {
         return null;
@@ -235,7 +236,7 @@ export function readPlayerAccessTokenCookie(header: string | undefined) {
 
 export function playerAccessCookie(token: string, expiresAt: Date) {
   const secure = process.env['NODE_ENV'] === 'production' ? '; Secure' : '';
-  const maxAge = playerTokenLifetimeSeconds;
+  const maxAge = viewerTokenLifetimeSeconds;
   return `myteam_player_access=${encodeURIComponent(token)}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Expires=${expiresAt.toUTCString()}${secure}`;
 }
 

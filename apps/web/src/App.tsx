@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { FormEvent } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import {
+  Navigate,
+  NavLink,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom';
 import {
   ActionIcon,
   AutoGrowTextarea,
@@ -30,6 +36,9 @@ import type {
 } from './features/stats/evaluation';
 import { StatGauge } from './features/stats/StatGauge';
 import AccessPages from './features/account/AccessPages';
+import { ClubhousePage } from './features/club/ClubhousePage';
+import { ClubHomePage } from './features/club/ClubHomePage';
+import { GameRoomFrame } from './features/club/GameRoomFrame';
 
 const LINEUP_STORAGE_KEY = 'my-team-lineups-v7';
 const SECOND_TEAM_LINEUP_STORAGE_KEY = 'my-team-lineups-team-b-v1';
@@ -63,6 +72,41 @@ const emptyTeamInfo: TeamInfo = {
   emblem: '⚽',
   logoDataUrl: '',
 };
+
+function hiddenStatsFor(
+  playerId: string,
+  questions: EvaluationQuestion[],
+  evaluations: Record<string, PlayerEvaluation>,
+) {
+  const scores = evaluations[playerId]?.scores ?? {};
+  const badges = questions
+    .flatMap((question) => {
+      const score = scores[question.id];
+      if (score === undefined || score < 4) return [];
+      const label = question.label.toLocaleLowerCase('ko-KR');
+      const badge = /속도|주력/.test(label)
+        ? '날쌘돌이'
+        : /체력|활동량|지구력/.test(label)
+          ? '산소탱크'
+          : /헤딩|점프/.test(label)
+            ? '강력한 헤더'
+            : /패스|전개/.test(label)
+              ? '패스 마스터'
+              : /슈팅|결정력/.test(label)
+                ? '슈퍼 피니셔'
+                : /수비|태클|대인/.test(label)
+                  ? '철벽 수비'
+                  : null;
+      return badge ? [{ badge, score }] : [];
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
+  if (badges.length > 0) return badges.map(({ badge }) => badge);
+  const bestQuestion = questions
+    .map((question) => ({ question, score: scores[question.id] ?? 0 }))
+    .sort((a, b) => b.score - a.score)[0];
+  return bestQuestion && bestQuestion.score > 0 ? ['든든한 팀 플레이어'] : [];
+}
 
 type SetupStep = 1 | 2 | 3;
 type MatchMode = 'scrimmage' | 'match';
@@ -496,6 +540,10 @@ function TeamApp() {
   const [isTeamInfoEditorOpen, setIsTeamInfoEditorOpen] = useState(false);
   const [teamInfoDraft, setTeamInfoDraft] = useState<TeamInfo>(teamInfo);
   const [playerSearch, setPlayerSearch] = useState('');
+  const [ageFilter, setAgeFilter] = useState('all');
+  const [minimumStatFilter, setMinimumStatFilter] = useState('');
+  const [positionFilter, setPositionFilter] = useState('all');
+  const [hiddenOnly, setHiddenOnly] = useState(false);
   const [playerSort, setPlayerSort] = useState<'name' | 'jersey'>('name');
   const [positionOptions, setPositionOptions] = useState<string[]>([
     ...positions,
@@ -537,12 +585,72 @@ function TeamApp() {
     y: number;
   } | null>(null);
   const isTeamManagementPage = location.pathname === '/team';
+  const isHomePage = location.pathname === '/';
+  const isClubhousePage = location.pathname === '/clubhouse';
   const isTeamInfoPage = location.pathname === '/team-info';
   const isStatsPage = location.pathname === '/stats';
   const isBoardPage = location.pathname === '/board';
   const isPlayerDetailPage =
     Boolean(playerId) && location.pathname.startsWith('/players/');
   const isPlayerEvaluationPage = location.pathname.endsWith('/evaluate');
+  const filteredManagementPlayers = players.filter((player) => {
+    const query = playerSearch.trim().toLocaleLowerCase('ko-KR');
+    const searchable = [
+      player.name,
+      String(player.jerseyNumber ?? ''),
+      ...player.preferredPositions,
+    ]
+      .join(' ')
+      .toLocaleLowerCase('ko-KR');
+    const age = new Date().getFullYear() - player.birthYear;
+    const scores = Object.values(
+      playerEvaluations[player.id]?.scores ?? {},
+    ).filter((score): score is number => typeof score === 'number');
+    const average = scores.length
+      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+      : 0;
+    const badges = hiddenStatsFor(
+      player.id,
+      evaluationQuestions,
+      playerEvaluations,
+    );
+    return (
+      searchable.includes(query) &&
+      (ageFilter === 'all' ||
+        (ageFilter === '50'
+          ? age >= 50
+          : Math.floor(age / 10) * 10 === Number(ageFilter))) &&
+      (!minimumStatFilter || average >= Number(minimumStatFilter)) &&
+      (positionFilter === 'all' ||
+        player.preferredPositions.includes(positionFilter as Position)) &&
+      (!hiddenOnly || badges.length > 0)
+    );
+  });
+  const filteredAttendeePlayers = players.filter((player) => {
+    const query = attendeeSearch.trim().toLocaleLowerCase('ko-KR');
+    const scores = Object.values(
+      playerEvaluations[player.id]?.scores ?? {},
+    ).filter((score): score is number => typeof score === 'number');
+    const average = scores.length
+      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+      : 0;
+    const age = new Date().getFullYear() - player.birthYear;
+    return (
+      `${player.name} ${player.jerseyNumber ?? ''} ${player.preferredPositions.join(' ')}`
+        .toLocaleLowerCase('ko-KR')
+        .includes(query) &&
+      (ageFilter === 'all' ||
+        (ageFilter === '50'
+          ? age >= 50
+          : Math.floor(age / 10) * 10 === Number(ageFilter))) &&
+      (!minimumStatFilter || average >= Number(minimumStatFilter)) &&
+      (positionFilter === 'all' ||
+        player.preferredPositions.includes(positionFilter as Position)) &&
+      (!hiddenOnly ||
+        hiddenStatsFor(player.id, evaluationQuestions, playerEvaluations)
+          .length > 0)
+    );
+  });
   const selectedDetailPlayer = players.find(({ id }) => id === playerId);
   const editingEvaluation = playerId ? playerEvaluations[playerId] : undefined;
   const evaluationScoreValues = editingEvaluation
@@ -704,7 +812,7 @@ function TeamApp() {
   useEffect(() => {
     if (
       evaluationQuestions.length === 0 ||
-      (!isTeamManagementPage && !isPlayerDetailPage)
+      (!isTeamManagementPage && !isClubhousePage && !isPlayerDetailPage)
     )
       return;
     let isActive = true;
@@ -765,7 +873,12 @@ function TeamApp() {
     return () => {
       isActive = false;
     };
-  }, [evaluationQuestions, isPlayerDetailPage, isTeamManagementPage]);
+  }, [
+    evaluationQuestions,
+    isClubhousePage,
+    isPlayerDetailPage,
+    isTeamManagementPage,
+  ]);
 
   useEffect(() => {
     if (isPlayerEvaluationPage && editingEvaluation) {
@@ -776,21 +889,28 @@ function TeamApp() {
   }, [editingEvaluation, isPlayerEvaluationPage]);
 
   useEffect(() => {
-    document.title = isPlayerDetailPage
-      ? `${selectedDetailPlayer?.name ?? '선수'} 상세 | MYTEAM`
-      : isTeamManagementPage
-        ? '팀원 관리 | MYTEAM'
-        : isTeamInfoPage
-          ? '팀 정보 | MYTEAM'
-          : isStatsPage
-            ? '팀 기록 | MYTEAM'
-            : 'MYTEAM';
+    document.title = isHomePage
+      ? `${teamInfo.name || '구단 홈'} | MYTEAM`
+      : isPlayerDetailPage
+        ? `${selectedDetailPlayer?.name ?? '선수'} 상세 | MYTEAM`
+        : isTeamManagementPage
+          ? '팀원 관리 | MYTEAM'
+          : isClubhousePage
+            ? '클럽하우스 | MYTEAM'
+            : isTeamInfoPage
+              ? '팀 정보 | MYTEAM'
+              : isStatsPage
+                ? '팀 기록 | MYTEAM'
+                : 'MYTEAM';
   }, [
     isStatsPage,
+    isHomePage,
     isTeamInfoPage,
+    isClubhousePage,
     isTeamManagementPage,
     isPlayerDetailPage,
     selectedDetailPlayer?.name,
+    teamInfo.name,
   ]);
 
   function navigateTo(path: '/board' | '/team-info' | '/team' | '/stats') {
@@ -800,12 +920,31 @@ function TeamApp() {
   async function copyTeamInviteCode() {
     if (!teamInfo.inviteCode) return;
     try {
-      await navigator.clipboard.writeText(teamInfo.inviteCode);
+      await navigator.clipboard.writeText(
+        `${window.location.origin}/join/${teamInfo.inviteCode}`,
+      );
       setIsInviteCodeCopied(true);
       window.setTimeout(() => setIsInviteCodeCopied(false), 1800);
     } catch {
       setNotice('팀 코드를 복사하지 못했습니다. 코드를 직접 선택해 주세요.');
     }
+  }
+
+  async function regenerateTeamInviteCode() {
+    if (!activeTeamId) return;
+    const response = await fetch(`/api/teams/${activeTeamId}/invite-code`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    if (!response.ok) {
+      setNotice('초대 코드를 갱신하지 못했습니다.');
+      return;
+    }
+    const data = (await response.json()) as { inviteCode: string };
+    setTeamInfo((current) => ({ ...current, inviteCode: data.inviteCode }));
+    setNotice(
+      '새 초대 코드가 발급되었습니다. 이전 링크는 더 이상 사용할 수 없습니다.',
+    );
   }
 
   function handleSheetPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1095,6 +1234,125 @@ function TeamApp() {
         ? `자체전 팀 A ${Math.ceil(selectedPlayers.length / 2)}명 · 팀 B ${Math.floor(selectedPlayers.length / 2)}명으로 ${quarterCount}쿼터 라인업을 만들었습니다.`
         : `${selectedPlayers.length}명 참석 · ${quarterCount}쿼터 라인업을 만들었습니다.`,
     );
+  }
+
+  async function saveCurrentTactic() {
+    if (!activeTeamId || lineups.length === 0) {
+      setNotice('먼저 전술을 구성해 주세요.');
+      return;
+    }
+    const name = window.prompt(
+      '저장할 전술 이름을 입력해 주세요.',
+      `${teamInfo.name || '우리 팀'} 전술`,
+    );
+    if (!name?.trim()) return;
+    try {
+      const response = await fetch(`/api/teams/${activeTeamId}/tactics`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          data: {
+            lineups,
+            secondTeamLineups,
+            quarterCount,
+            formationMode,
+            formationId,
+            matchMode,
+          },
+        }),
+      });
+      if (!response.ok) throw new Error('전술을 저장하지 못했습니다.');
+      const tactic = (await response.json()) as { id: string };
+      const shouldShare = window.confirm('저장한 전술을 팀원에게 공유할까요?');
+      if (shouldShare)
+        await fetch(`/api/teams/${activeTeamId}/tactics/${tactic.id}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isShared: true }),
+        });
+      setNotice(
+        shouldShare
+          ? '전술을 저장하고 팀원에게 공유했습니다.'
+          : '전술을 저장했습니다.',
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : '전술 저장에 실패했습니다.',
+      );
+    }
+  }
+
+  async function manageSavedTactics() {
+    if (!activeTeamId) return;
+    try {
+      const response = await fetch(`/api/teams/${activeTeamId}/tactics`, {
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error('전술 목록을 불러오지 못했습니다.');
+      const tactics = (await response.json()) as Array<{
+        id: string;
+        name: string;
+        isShared: boolean;
+        data: Record<string, unknown>;
+      }>;
+      if (!tactics.length) {
+        setNotice('저장된 전술이 없습니다.');
+        return;
+      }
+      const selected = window.prompt(
+        tactics
+          .map(
+            (tactic, index) =>
+              `${index + 1}. ${tactic.name}${tactic.isShared ? ' · 공유 중' : ''}`,
+          )
+          .join('\\n') +
+          '\\n\\n불러오거나 공유 설정을 바꿀 전술 번호를 입력하세요.',
+      );
+      const index = Number(selected) - 1;
+      if (!Number.isInteger(index) || !tactics[index]) return;
+      const tactic = tactics[index];
+      if (window.confirm(`“${tactic.name}”을 현재 전술보드에 불러올까요?`)) {
+        const savedLineups = tactic.data['lineups'];
+        const savedSecondTeamLineups = tactic.data['secondTeamLineups'];
+        if (!Array.isArray(savedLineups)) {
+          setNotice('이 전술에 저장된 배치 정보를 찾을 수 없습니다.');
+          return;
+        }
+        setLineups(savedLineups as QuarterLineup[]);
+        setSecondTeamLineups(
+          Array.isArray(savedSecondTeamLineups)
+            ? (savedSecondTeamLineups as QuarterLineup[])
+            : [],
+        );
+        if (typeof tactic.data['quarterCount'] === 'number') {
+          setQuarterCount(tactic.data['quarterCount']);
+          setQuarterCountInput(String(tactic.data['quarterCount']));
+        }
+        navigate('/board');
+        setNotice('저장한 전술을 불러왔습니다.');
+        return;
+      }
+      await fetch(`/api/teams/${activeTeamId}/tactics/${tactic.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isShared: !tactic.isShared }),
+      });
+      setNotice(
+        tactic.isShared
+          ? '전술 공유를 해제했습니다.'
+          : '팀원에게 전술을 공유했습니다.',
+      );
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : '전술 목록을 불러오지 못했습니다.',
+      );
+    }
   }
 
   async function addPlayer(event: FormEvent<HTMLFormElement>) {
@@ -1560,10 +1818,25 @@ function TeamApp() {
 
   return (
     <main className="app-shell bg-canvas text-ink">
+      {!isHomePage && (
+        <GameRoomFrame
+          room={
+            isClubhousePage
+              ? 'clubhouse'
+              : isBoardPage
+                ? 'meeting'
+                : isTeamManagementPage || isPlayerDetailPage
+                  ? 'scouting'
+                  : isTeamInfoPage
+                    ? 'office'
+                    : 'records'
+          }
+        />
+      )}
       <header className="app-header flex items-center justify-between border-b border-line bg-surface px-3 sm:px-5">
         <a
           className="group flex items-center gap-2.5"
-          href="/team-info"
+          href="/"
           aria-label="MYTEAM 홈"
         >
           <span className="relative grid size-10 place-items-center overflow-hidden rounded-2xl bg-brand-800 text-white shadow-sm ring-1 ring-brand-900/10 transition-transform group-hover:-rotate-3">
@@ -1599,6 +1872,12 @@ function TeamApp() {
             MY<span className="text-brand-600">TEAM</span>
           </span>
         </a>
+        {isHomePage && (
+          <span className="home-header-team-name">
+            <small>CLUB GROUNDS</small>
+            <strong>{teamInfo.name || '우리 구단'}</strong>
+          </span>
+        )}
         <button
           type="button"
           className="team-switch-button"
@@ -1625,17 +1904,104 @@ function TeamApp() {
         </div>
       )}
 
+      {isHomePage && <ClubHomePage teamName={teamInfo.name} />}
+
       {isTeamManagementPage && (
         <section
           className="team-management-page styled-scrollbar"
           aria-busy={!isRosterLoaded}
         >
           <div className="team-page-content">
-            <div>
-              <h1 className="text-xl font-black">팀 관리</h1>
-              <p className="mt-1 text-sm text-ink-muted">
-                선수 정보를 보고 평가표를 작성할 수 있어요.
-              </p>
+            <section className="club-management-hero">
+              <div className="club-hero-copy">
+                <span className="club-hero-eyebrow">
+                  CLUB OPERATIONS · SQUAD
+                </span>
+                <h1>{teamInfo.name || '우리 팀'} 선수단</h1>
+                <p>
+                  선수단의 현재 상태를 살펴보고, 다음 경기 준비를 이어가세요.
+                </p>
+                <div className="club-hero-actions">
+                  <Button size="sm" onClick={() => navigate('/board')}>
+                    전술실 열기 <span aria-hidden="true">↗</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => navigate('/team-info')}
+                  >
+                    클럽 홈
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="quiet"
+                    onClick={() => {
+                      setPlayerFormSource('menu');
+                      setEditingPlayerId(null);
+                      setNewPlayerType('member');
+                      setIsAddingPlayer(true);
+                    }}
+                  >
+                    + 선수 등록
+                  </Button>
+                </div>
+              </div>
+              <div className="club-hero-emblem" aria-hidden="true">
+                {teamInfo.emblem || '⚽'}
+              </div>
+              <div className="club-hero-pitch-mark" aria-hidden="true">
+                <span />
+              </div>
+              <div className="club-hero-metrics">
+                <div>
+                  <span>등록 선수</span>
+                  <strong>
+                    {players.length}
+                    <small>명</small>
+                  </strong>
+                </div>
+                <div>
+                  <span>평가 완료</span>
+                  <strong>
+                    {
+                      players.filter(
+                        ({ id }) =>
+                          Object.keys(playerEvaluations[id]?.scores ?? {})
+                            .length > 0,
+                      ).length
+                    }
+                    <small>명</small>
+                  </strong>
+                </div>
+                <div>
+                  <span>히든 스탯</span>
+                  <strong>
+                    {
+                      players.filter(
+                        ({ id }) =>
+                          hiddenStatsFor(
+                            id,
+                            evaluationQuestions,
+                            playerEvaluations,
+                          ).length > 0,
+                      ).length
+                    }
+                    <small>명</small>
+                  </strong>
+                </div>
+              </div>
+            </section>
+            <div className="club-section-heading">
+              <div>
+                <span className="club-section-kicker">SQUAD ROOM</span>
+                <h2>선수단 관리</h2>
+                <p>
+                  검색과 조건 필터로 선수를 찾고, 평가와 상세 정보를 관리합니다.
+                </p>
+              </div>
+              <span className="club-roster-count">
+                {filteredManagementPlayers.length} / {players.length}명
+              </span>
             </div>
             <div className="flex items-end gap-1.5">
               <TextInput
@@ -1663,16 +2029,59 @@ function TeamApp() {
                 <SelectChevron />
               </label>
             </div>
-            {players.filter((player) => {
-              const query = playerSearch.trim().toLocaleLowerCase('ko-KR');
-              return [
-                player.name,
-                player.jerseyNumber == null ? '' : String(player.jerseyNumber),
-                ...player.preferredPositions,
-              ].some((value) =>
-                value.toLocaleLowerCase('ko-KR').includes(query),
-              );
-            }).length === 0 ? (
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs font-bold text-ink-muted">
+                연령대
+                <select
+                  className="mt-1 h-10 w-full rounded-xl border border-line bg-surface px-2 text-sm"
+                  value={ageFilter}
+                  onChange={(event) => setAgeFilter(event.target.value)}
+                >
+                  <option value="all">전체</option>
+                  <option value="20">20대</option>
+                  <option value="30">30대</option>
+                  <option value="40">40대</option>
+                  <option value="50">50대 이상</option>
+                </select>
+              </label>
+              <label className="text-xs font-bold text-ink-muted">
+                최소 평균 스탯
+                <select
+                  className="mt-1 h-10 w-full rounded-xl border border-line bg-surface px-2 text-sm"
+                  value={minimumStatFilter}
+                  onChange={(event) => setMinimumStatFilter(event.target.value)}
+                >
+                  <option value="">전체</option>
+                  <option value="2">2점 이상</option>
+                  <option value="3">3점 이상</option>
+                  <option value="4">4점 이상</option>
+                </select>
+              </label>
+              <label className="text-xs font-bold text-ink-muted">
+                포지션
+                <select
+                  className="mt-1 h-10 w-full rounded-xl border border-line bg-surface px-2 text-sm"
+                  value={positionFilter}
+                  onChange={(event) => setPositionFilter(event.target.value)}
+                >
+                  <option value="all">전체 포지션</option>
+                  {positions.map((position) => (
+                    <option key={position} value={position}>
+                      {position}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex items-center gap-2 self-end rounded-xl border border-line px-3 py-2 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={hiddenOnly}
+                  onChange={(event) => setHiddenOnly(event.target.checked)}
+                />
+                히든 스탯 보유자
+              </label>
+            </div>
+            {filteredManagementPlayers.length === 0 ? (
               <p className="rounded-2xl bg-surface-subtle p-5 text-center text-sm text-ink-muted">
                 {players.length === 0
                   ? '등록된 팀원이 없습니다.'
@@ -1680,21 +2089,7 @@ function TeamApp() {
               </p>
             ) : (
               <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
-                {players
-                  .filter((player) => {
-                    const query = playerSearch
-                      .trim()
-                      .toLocaleLowerCase('ko-KR');
-                    return [
-                      player.name,
-                      player.jerseyNumber == null
-                        ? ''
-                        : String(player.jerseyNumber),
-                      ...player.preferredPositions,
-                    ].some((value) =>
-                      value.toLocaleLowerCase('ko-KR').includes(query),
-                    );
-                  })
+                {filteredManagementPlayers
                   .sort((first, second) =>
                     playerSort === 'jersey'
                       ? (first.jerseyNumber ?? Number.MAX_SAFE_INTEGER) -
@@ -1725,8 +2120,11 @@ function TeamApp() {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-bold">
                           {player.jerseyNumber != null && (
-                            <span className="mr-1.5 text-brand-700">
-                              #{player.jerseyNumber}
+                            <span
+                              className="team-jersey-number"
+                              aria-label={`등번호 ${player.jerseyNumber}`}
+                            >
+                              {player.jerseyNumber}
                             </span>
                           )}
                           {player.name}
@@ -1737,6 +2135,18 @@ function TeamApp() {
                         </span>
                         <span className="flex min-w-0 items-center gap-2">
                           <PlayerTypeBadge type={player.type} />
+                          {hiddenStatsFor(
+                            player.id,
+                            evaluationQuestions,
+                            playerEvaluations,
+                          ).map((badge) => (
+                            <span
+                              className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900"
+                              key={badge}
+                            >
+                              {badge}
+                            </span>
+                          ))}
                           <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">
                             {player.preferredPositions.join(' · ')}
                           </span>
@@ -1793,6 +2203,29 @@ function TeamApp() {
             )}
           </div>
         </section>
+      )}
+
+      {isClubhousePage && (
+        <ClubhousePage
+          name={teamInfo.name}
+          emblem={teamInfo.emblem}
+          homeTown={teamInfo.homeTown}
+          description={teamInfo.description}
+          playerCount={players.length}
+          evaluatedCount={
+            players.filter(
+              ({ id }) =>
+                Object.keys(playerEvaluations[id]?.scores ?? {}).length > 0,
+            ).length
+          }
+          hiddenStatCount={
+            players.filter(
+              ({ id }) =>
+                hiddenStatsFor(id, evaluationQuestions, playerEvaluations)
+                  .length > 0,
+            ).length
+          }
+        />
       )}
 
       {isPlayerDetailPage &&
@@ -2091,10 +2524,10 @@ function TeamApp() {
             </section>
             <section className="team-invite-card">
               <div>
-                <p className="text-sm font-bold">선수용 팀 초대 코드</p>
+                <p className="text-sm font-bold">팀원 초대 링크</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  선수는 이 코드와 팀 명단의 등번호로 본인 기록을 확인할 수
-                  있어요.
+                  링크를 단체 채팅방에 공유하면 팀원들이 조회 전용 대시보드에
+                  입장합니다.
                 </p>
               </div>
               <button
@@ -2107,9 +2540,13 @@ function TeamApp() {
                     ? '팀 초대 코드 복사 완료'
                     : '팀 초대 코드 복사'
                 }
-                title="클릭해서 팀 코드를 복사"
+                title="클릭해서 초대 링크를 복사"
               >
-                <strong>{teamInfo.inviteCode || '불러오는 중…'}</strong>
+                <strong>
+                  {teamInfo.inviteCode
+                    ? `${window.location.origin}/join/${teamInfo.inviteCode}`
+                    : '불러오는 중…'}
+                </strong>
                 <span className="team-invite-copy-mark" aria-hidden="true">
                   {isInviteCodeCopied ? (
                     <svg viewBox="0 0 20 20" fill="none">
@@ -2126,6 +2563,13 @@ function TeamApp() {
                   {isInviteCodeCopied ? '복사 완료' : ''}
                 </span>
               </button>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void regenerateTeamInviteCode()}
+              >
+                초대 코드 재발급
+              </Button>
             </section>
             <div className="team-info-heading">
               <span className="team-info-emblem" aria-hidden="true">
@@ -2438,30 +2882,32 @@ function TeamApp() {
           </section>
         </div>
       )}
-      <nav className="bottom-navigation" aria-label="주요 메뉴">
-        {(
-          [
-            { to: '/team-info', label: '홈', icon: '⌂' },
-            { to: '/board', label: '전술보드', icon: '⚽' },
-            { to: '/team', label: '팀 관리', icon: '♙' },
-            { to: '/stats', label: '팀 기록', icon: '▤' },
-          ] as const
-        ).map(({ to, label, icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/board'}
-            className={({ isActive }) =>
-              `bottom-navigation-item ${isActive ? 'is-active' : ''}`
-            }
-          >
-            <span className="bottom-navigation-icon" aria-hidden="true">
-              {icon}
-            </span>
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      {!isHomePage && (
+        <nav className="bottom-navigation" aria-label="주요 메뉴">
+          {(
+            [
+              { to: '/', label: '클럽하우스', icon: '⌂' },
+              { to: '/board', label: '미팅룸', icon: '▦' },
+              { to: '/team', label: '스카우트실', icon: '♙' },
+              { to: '/team-info', label: '구단 사무국', icon: '▤' },
+            ] as const
+          ).map(({ to, label, icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/board'}
+              className={({ isActive }) =>
+                `bottom-navigation-item ${isActive ? 'is-active' : ''}`
+              }
+            >
+              <span className="bottom-navigation-icon" aria-hidden="true">
+                {icon}
+              </span>
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      )}
 
       {isTeamManagementPage && (
         <button
@@ -2830,6 +3276,22 @@ function TeamApp() {
             >
               전술판 초기화
             </button>
+            <Button
+              variant="secondary"
+              className="w-full"
+              size="sm"
+              onClick={() => void saveCurrentTactic()}
+            >
+              전술 저장
+            </Button>
+            <Button
+              variant="quiet"
+              className="w-full"
+              size="sm"
+              onClick={() => void manageSavedTactics()}
+            >
+              저장 전술 목록·공유
+            </Button>
           </footer>
         </>
       )}
@@ -2910,6 +3372,83 @@ function TeamApp() {
                       placeholder="이름으로 찾기"
                     />
                   </div>
+                  <details className="rounded-xl border border-line p-3">
+                    <summary className="cursor-pointer text-sm font-bold">
+                      라인업 조건 필터
+                    </summary>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <label className="text-xs font-semibold">
+                        연령대
+                        <select
+                          className="mt-1 h-10 w-full rounded-lg border border-line bg-surface px-2"
+                          value={ageFilter}
+                          onChange={(event) => setAgeFilter(event.target.value)}
+                        >
+                          <option value="all">전체</option>
+                          <option value="20">20대</option>
+                          <option value="30">30대</option>
+                          <option value="40">40대</option>
+                          <option value="50">50대 이상</option>
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold">
+                        최소 평균
+                        <select
+                          className="mt-1 h-10 w-full rounded-lg border border-line bg-surface px-2"
+                          value={minimumStatFilter}
+                          onChange={(event) =>
+                            setMinimumStatFilter(event.target.value)
+                          }
+                        >
+                          <option value="">전체</option>
+                          <option value="2">2점+</option>
+                          <option value="3">3점+</option>
+                          <option value="4">4점+</option>
+                        </select>
+                      </label>
+                      <label className="text-xs font-semibold">
+                        포지션
+                        <select
+                          className="mt-1 h-10 w-full rounded-lg border border-line bg-surface px-2"
+                          value={positionFilter}
+                          onChange={(event) =>
+                            setPositionFilter(event.target.value)
+                          }
+                        >
+                          <option value="all">전체</option>
+                          {positions.map((position) => (
+                            <option key={position} value={position}>
+                              {position}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold">
+                        <input
+                          type="checkbox"
+                          checked={hiddenOnly}
+                          onChange={(event) =>
+                            setHiddenOnly(event.target.checked)
+                          }
+                        />
+                        히든 스탯 보유
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      className="mt-3 min-h-9 w-full rounded-lg bg-brand-50 text-sm font-bold text-brand-800"
+                      onClick={() =>
+                        setSelectedPlayerIds((current) => [
+                          ...new Set([
+                            ...current,
+                            ...filteredAttendeePlayers.map(({ id }) => id),
+                          ]),
+                        ])
+                      }
+                    >
+                      조건에 맞는 {filteredAttendeePlayers.length}명 참석 선택
+                    </button>
+                  </details>
                   <div className="flex items-center justify-between gap-3">
                     <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm font-bold text-brand-800">
                       <input
@@ -2960,60 +3499,52 @@ function TeamApp() {
                     </div>
                   ) : (
                     <div className="attendee-list styled-scrollbar divide-y divide-line overflow-y-auto rounded-2xl border border-line">
-                      {players
-                        .filter(({ name }) =>
-                          name
-                            .toLocaleLowerCase('ko-KR')
-                            .includes(
-                              attendeeSearch.trim().toLocaleLowerCase('ko-KR'),
-                            ),
-                        )
-                        .map((player) => {
-                          const checked = selectedPlayerIds.includes(player.id);
+                      {filteredAttendeePlayers.map((player) => {
+                        const checked = selectedPlayerIds.includes(player.id);
 
-                          return (
-                            <div
-                              key={player.id}
-                              className={`flex min-h-14 items-center gap-3 px-3 py-2 ${checked ? '' : 'opacity-55'}`}
+                        return (
+                          <div
+                            key={player.id}
+                            className={`flex min-h-14 items-center gap-3 px-3 py-2 ${checked ? '' : 'opacity-55'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              aria-label={`${player.name} 참석 여부`}
+                              onChange={() => toggleAttendance(player.id)}
+                              className="size-5 accent-brand-700"
+                            />
+                            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand-100 text-sm font-extrabold text-brand-800">
+                              {player.name.slice(0, 1)}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-bold">
+                                {player.name}
+                                <span className="ml-1 font-medium text-ink-faint">
+                                  {player.birthYear}년생 · 만{' '}
+                                  {getPlayerAge(player.birthYear)}세
+                                </span>
+                              </span>
+                              <span className="block truncate text-xs text-ink-muted">
+                                {player.preferredPositions.join(' · ')}
+                              </span>
+                            </span>
+                            <PlayerTypeBadge type={player.type} />
+                            <button
+                              type="button"
+                              className="action-icon-button text-brand-700 hover:bg-brand-50"
+                              aria-label={`${player.name} 선수 정보 수정`}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                editPlayer(player);
+                              }}
                             >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                aria-label={`${player.name} 참석 여부`}
-                                onChange={() => toggleAttendance(player.id)}
-                                className="size-5 accent-brand-700"
-                              />
-                              <span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand-100 text-sm font-extrabold text-brand-800">
-                                {player.name.slice(0, 1)}
-                              </span>
-                              <span className="min-w-0 flex-1">
-                                <span className="block truncate text-sm font-bold">
-                                  {player.name}
-                                  <span className="ml-1 font-medium text-ink-faint">
-                                    {player.birthYear}년생 · 만{' '}
-                                    {getPlayerAge(player.birthYear)}세
-                                  </span>
-                                </span>
-                                <span className="block truncate text-xs text-ink-muted">
-                                  {player.preferredPositions.join(' · ')}
-                                </span>
-                              </span>
-                              <PlayerTypeBadge type={player.type} />
-                              <button
-                                type="button"
-                                className="action-icon-button text-brand-700 hover:bg-brand-50"
-                                aria-label={`${player.name} 선수 정보 수정`}
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  editPlayer(player);
-                                }}
-                              >
-                                <ActionIcon name="edit" className="size-4" />
-                              </button>
-                            </div>
-                          );
-                        })}
+                              <ActionIcon name="edit" className="size-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
                       {players.every(
                         ({ name }) =>
                           !name
@@ -3424,14 +3955,15 @@ function TeamApp() {
 
 export default function App() {
   const { pathname } = useLocation();
+  if (pathname === '/clubhouse') return <Navigate to="/" replace />;
   if (
-    pathname === '/' ||
     pathname === '/welcome' ||
     pathname === '/login' ||
     pathname === '/signup' ||
     pathname === '/teams' ||
     pathname === '/teams/new' ||
     pathname === '/join' ||
+    pathname.startsWith('/join/') ||
     pathname === '/my-stats'
   ) {
     return <AccessPages />;

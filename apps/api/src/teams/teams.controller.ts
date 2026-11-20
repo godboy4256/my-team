@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Put,
+  Patch,
   Req,
   Res,
   UnauthorizedException,
@@ -122,18 +123,14 @@ export class TeamsController {
     const value = objectBody(body);
     if (
       typeof value['inviteCode'] !== 'string' ||
-      typeof value['jerseyNumber'] !== 'number' ||
-      !Number.isInteger(value['jerseyNumber']) ||
-      value['jerseyNumber'] < 0 ||
-      value['jerseyNumber'] > 99
+      !value['inviteCode'].trim()
     ) {
-      throw new BadRequestException('초대 코드와 등번호를 입력해 주세요.');
+      throw new BadRequestException('초대 코드를 입력해 주세요.');
     }
-    const memberView = await this.teams.joinForPlayer(
+    const memberView = await this.teams.joinWithInviteCode(
       value['inviteCode'].trim().toUpperCase(),
-      value['jerseyNumber'],
     );
-    const token = this.auth.createPlayerAccessToken(memberView.player.id);
+    const token = this.auth.createTeamViewerAccessToken(memberView.team.id);
     response.setHeader(
       'Set-Cookie',
       playerAccessCookie(token.token, token.expiresAt),
@@ -141,15 +138,15 @@ export class TeamsController {
     return memberView;
   }
 
-  @Get('member/me')
-  async getPlayerView(@Req() request: Request) {
-    const playerId = this.auth.findPlayerIdByAccessToken(
+  @Get('viewer/me')
+  async getTeamView(@Req() request: Request) {
+    const teamId = this.auth.findTeamIdByViewerAccessToken(
       readPlayerAccessTokenCookie(request.headers.cookie),
     );
-    if (!playerId) {
-      throw new UnauthorizedException('팀 조회 정보가 만료되었습니다.');
+    if (!teamId) {
+      throw new UnauthorizedException('팀 초대 정보가 만료되었습니다.');
     }
-    return this.teams.getPlayerView(playerId);
+    return this.teams.getTeamViewerView(teamId);
   }
 
   @Post('member/logout')
@@ -214,5 +211,85 @@ export class TeamsController {
     @Param('teamId') teamId: string,
   ) {
     return this.teams.findOwnedTeam(request.user.id, teamId);
+  }
+
+  @Post(':teamId/invite-code')
+  @UseGuards(AuthGuard)
+  regenerateInviteCode(
+    @Req() request: AuthenticatedRequest,
+    @Param('teamId') teamId: string,
+  ) {
+    return this.teams.regenerateInviteCode(request.user.id, teamId);
+  }
+
+  @Get(':teamId/tactics')
+  @UseGuards(AuthGuard)
+  listTactics(
+    @Req() request: AuthenticatedRequest,
+    @Param('teamId') teamId: string,
+  ) {
+    return this.teams.listTactics(request.user.id, teamId);
+  }
+
+  @Post(':teamId/tactics')
+  @UseGuards(AuthGuard)
+  saveTactic(
+    @Req() request: AuthenticatedRequest,
+    @Param('teamId') teamId: string,
+    @Body() body: unknown,
+  ) {
+    const value = objectBody(body);
+    if (
+      typeof value['name'] !== 'string' ||
+      !value['name'].trim() ||
+      typeof value['data'] !== 'object' ||
+      value['data'] === null ||
+      Array.isArray(value['data'])
+    ) {
+      throw new BadRequestException('전술 이름과 배치 정보를 확인해 주세요.');
+    }
+    return this.teams.saveTactic(
+      request.user.id,
+      teamId,
+      value['name'],
+      value['data'] as Record<string, unknown>,
+    );
+  }
+
+  @Patch(':teamId/tactics/:tacticId')
+  @UseGuards(AuthGuard)
+  updateTactic(
+    @Req() request: AuthenticatedRequest,
+    @Param('teamId') teamId: string,
+    @Param('tacticId') tacticId: string,
+    @Body() body: unknown,
+  ) {
+    const value = objectBody(body);
+    const input: {
+      name?: string;
+      data?: Record<string, unknown>;
+      isShared?: boolean;
+    } = {};
+    if (typeof value['name'] === 'string' && value['name'].trim())
+      input.name = value['name'];
+    if (typeof value['isShared'] === 'boolean')
+      input.isShared = value['isShared'];
+    if (
+      typeof value['data'] === 'object' &&
+      value['data'] !== null &&
+      !Array.isArray(value['data'])
+    )
+      input.data = value['data'] as Record<string, unknown>;
+    return this.teams.updateTactic(request.user.id, teamId, tacticId, input);
+  }
+
+  @Delete(':teamId/tactics/:tacticId')
+  @UseGuards(AuthGuard)
+  deleteTactic(
+    @Req() request: AuthenticatedRequest,
+    @Param('teamId') teamId: string,
+    @Param('tacticId') tacticId: string,
+  ) {
+    return this.teams.deleteTactic(request.user.id, teamId, tacticId);
   }
 }

@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, TextInput } from '../../components';
 import { fetchEvaluationQuestions } from '../stats/evaluation';
 import type { EvaluationQuestion } from '../stats/evaluation';
-import { StatGauge } from '../stats/StatGauge';
 
 type User = { id: string; name: string; age: number; username: string };
 type Team = {
@@ -13,7 +12,7 @@ type Team = {
   inviteCode: string;
   playerCount: number;
 };
-type MemberView = {
+type TeamViewerView = {
   team: {
     id: string;
     name: string;
@@ -21,14 +20,21 @@ type MemberView = {
     homeGround: string;
     description: string;
   };
-  player: {
+  players: Array<{
     id: string;
     name: string;
     jerseyNumber: number | null;
     birthYear: number;
     preferredPositions: string[];
-  };
-  evaluation: Record<string, number> | null;
+    type: 'member' | 'guest';
+    evaluation: Record<string, number> | null;
+  }>;
+  tactics: Array<{
+    id: string;
+    name: string;
+    data: Record<string, unknown>;
+    updatedAt: string;
+  }>;
 };
 
 async function getErrorMessage(response: Response) {
@@ -82,8 +88,8 @@ function WelcomePage() {
           한곳에서
         </h1>
         <p className="access-description">
-          팀 관리자는 계정으로 팀을 운영하고, 선수는 계정 없이 팀 코드와
-          등번호로 자기 기록을 확인할 수 있어요.
+          팀 관리자는 계정으로 팀을 운영하고, 팀원은 초대 링크로 팀 현황과
+          공유된 전술을 확인할 수 있어요.
         </p>
         <div className="access-actions">
           <Button className="w-full" onClick={() => navigate('/login')}>
@@ -111,7 +117,7 @@ function WelcomePage() {
           </p>
           <p>
             <strong>선수</strong>
-            <span>초대 코드와 등번호로 본인 스탯을 확인해요.</span>
+            <span>초대 코드로 팀 대시보드를 조회해요.</span>
           </p>
         </div>
       </section>
@@ -278,7 +284,7 @@ function TeamsPage() {
         setTeams(teamPayload);
         if (teamPayload.length === 1 && !showTeamList) {
           sessionStorage.setItem('my-team-active-team', teamPayload[0].id);
-          navigate('/team-info', { replace: true });
+          navigate('/', { replace: true });
         }
       } catch {
         if (active)
@@ -333,7 +339,7 @@ function TeamsPage() {
               className="access-team-choice"
               onClick={() => {
                 sessionStorage.setItem('my-team-active-team', team.id);
-                navigate('/team-info');
+                navigate('/');
               }}
             >
               <span>
@@ -380,7 +386,7 @@ function CreateTeamPage() {
       if (!response.ok) throw new Error(await getErrorMessage(response));
       const team = (await response.json()) as Team;
       sessionStorage.setItem('my-team-active-team', team.id);
-      navigate('/team-info');
+      navigate('/');
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : '팀을 만들지 못했습니다.',
@@ -429,8 +435,8 @@ function CreateTeamPage() {
 
 function JoinTeamPage() {
   const navigate = useNavigate();
-  const [inviteCode, setInviteCode] = useState('');
-  const [jerseyNumber, setJerseyNumber] = useState('');
+  const { inviteCode: routeInviteCode } = useParams<{ inviteCode: string }>();
+  const [inviteCode, setInviteCode] = useState(routeInviteCode ?? '');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -444,7 +450,6 @@ function JoinTeamPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           inviteCode,
-          jerseyNumber: Number(jerseyNumber),
         }),
       });
       if (!response.ok) throw new Error(await getErrorMessage(response));
@@ -470,8 +475,7 @@ function JoinTeamPage() {
         <p className="access-eyebrow">선수용 팀 조회</p>
         <h1 className="access-title">팀에 입장하기</h1>
         <p className="access-description">
-          팀 초대 코드와 팀 명단에 등록된 등번호를 입력해 주세요. 계정 가입은
-          필요하지 않습니다.
+          감독이 공유한 초대 코드를 입력하면 팀 대시보드에 입장합니다.
         </p>
         <p className="access-hint">
           한 번 확인하면 이 기기에서 다음 방문 때 자동으로 기록을 불러와요.
@@ -487,23 +491,13 @@ function JoinTeamPage() {
             required
             autoCapitalize="characters"
           />
-          <TextInput
-            label="등번호"
-            name="jerseyNumber"
-            type="number"
-            min={0}
-            max={99}
-            value={jerseyNumber}
-            onChange={(event) => setJerseyNumber(event.target.value)}
-            required
-          />
           {error && (
             <p className="access-error" role="alert">
               {error}
             </p>
           )}
           <Button type="submit" className="mt-2 w-full" disabled={isSubmitting}>
-            {isSubmitting ? '확인 중…' : '팀 기록 보기'}
+            {isSubmitting ? '확인 중…' : '팀 대시보드 보기'}
           </Button>
         </form>
       </section>
@@ -512,216 +506,191 @@ function JoinTeamPage() {
 }
 
 function MyStatsPage() {
-  const navigate = useNavigate();
-  const [memberView, setMemberView] = useState<MemberView | null>(null);
-  const [evaluationQuestions, setEvaluationQuestions] = useState<
-    EvaluationQuestion[]
-  >([]);
-  const [isLoadingSavedPlayer, setIsLoadingSavedPlayer] = useState(true);
-  const [inviteCode, setInviteCode] = useState('');
-  const [jerseyNumber, setJerseyNumber] = useState('');
+  const [view, setView] = useState<TeamViewerView | null>(null);
+  const [questions, setQuestions] = useState<EvaluationQuestion[]>([]);
+  const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     let active = true;
-    fetchEvaluationQuestions()
-      .then((questions) => {
-        if (active) setEvaluationQuestions(questions);
+    Promise.all([
+      fetch('/api/teams/viewer/me', { credentials: 'include' }).then(
+        async (response) => {
+          if (!response.ok) throw new Error('초대 링크를 다시 열어 주세요.');
+          return (await response.json()) as TeamViewerView;
+        },
+      ),
+      fetchEvaluationQuestions(),
+    ])
+      .then(([teamView, evaluationQuestions]) => {
+        if (!active) return;
+        setView(teamView);
+        setQuestions(evaluationQuestions);
       })
-      .catch(() => {
-        if (active) setError('평가 항목을 불러오지 못했습니다.');
-      });
-    fetch('/api/teams/member/me', { credentials: 'include' })
-      .then(async (response) => {
-        if (!response.ok) return null;
-        return (await response.json()) as MemberView;
-      })
-      .then((savedView) => {
-        if (active && savedView) setMemberView(savedView);
-      })
-      .catch(() => {
-        if (active) setError('저장된 기록을 불러오지 못했습니다.');
-      })
-      .finally(() => {
-        if (active) setIsLoadingSavedPlayer(false);
+      .catch((caught: unknown) => {
+        if (active)
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : '팀 정보를 불러오지 못했습니다.',
+          );
       });
     return () => {
       active = false;
     };
   }, []);
 
-  async function findPlayer(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError('');
-    try {
-      const response = await fetch('/api/teams/join', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inviteCode,
-          jerseyNumber: Number(jerseyNumber),
-        }),
-      });
-      if (!response.ok) throw new Error(await getErrorMessage(response));
-      setMemberView((await response.json()) as MemberView);
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : '선수를 찾지 못했습니다.',
-      );
-    }
-  }
+  const visiblePlayers = (view?.players ?? []).filter((player) =>
+    `${player.name} ${player.jerseyNumber ?? ''} ${player.preferredPositions.join(' ')}`
+      .toLocaleLowerCase('ko-KR')
+      .includes(search.trim().toLocaleLowerCase('ko-KR')),
+  );
 
-  async function clearSavedPlayer() {
-    await fetch('/api/teams/member/logout', {
-      method: 'POST',
-      credentials: 'include',
-    });
-    setMemberView(null);
-    setError('');
-    setInviteCode('');
-    setJerseyNumber('');
-  }
-
-  if (!memberView && isLoadingSavedPlayer) {
+  if (!view)
     return (
       <PageFrame>
         <section className="access-card">
-          <h1 className="access-title">내 기록 확인</h1>
+          <h1 className="access-title">팀 대시보드</h1>
           <p className="access-description">
-            저장된 팀 기록을 불러오고 있어요.
+            {error || '초대 정보를 확인하고 있습니다.'}
           </p>
-        </section>
-      </PageFrame>
-    );
-  }
-
-  if (!memberView)
-    return (
-      <PageFrame>
-        <section className="access-card">
-          <h1 className="access-title">내 기록 확인</h1>
-          <p className="access-description">
-            팀 초대 코드와 등번호를 입력해 본인 기록을 확인하세요.
-          </p>
-          <p className="access-hint">
-            한 번 확인하면 이 기기에서 다음 방문 때 자동으로 기록을 불러와요.
-          </p>
-          <form className="access-form" onSubmit={findPlayer}>
-            <TextInput
-              label="팀 초대 코드"
-              name="inviteCode"
-              value={inviteCode}
-              onChange={(event) =>
-                setInviteCode(event.target.value.toUpperCase())
-              }
-              required
-            />
-            <TextInput
-              label="등번호"
-              name="jerseyNumber"
-              type="number"
-              min={0}
-              max={99}
-              value={jerseyNumber}
-              onChange={(event) => setJerseyNumber(event.target.value)}
-              required
-            />
-            {error && (
-              <p className="access-error" role="alert">
-                {error}
-              </p>
-            )}
-            <Button type="submit" className="w-full">
-              내 스탯 보기
+          {error && (
+            <Button className="w-full" onClick={() => navigate('/join')}>
+              초대 코드 입력
             </Button>
-          </form>
-        </section>
-      </PageFrame>
-    );
-
-  const average = memberView.evaluation
-    ? Object.values(memberView.evaluation).reduce(
-        (sum, score) => sum + score,
-        0,
-      ) / Object.values(memberView.evaluation).length
-    : null;
-  return (
-    <PageFrame>
-      <section className="access-card member-dashboard">
-        <button
-          type="button"
-          className="access-back"
-          onClick={() => navigate('/welcome')}
-        >
-          ← MYTEAM 시작
-        </button>
-        <p className="access-eyebrow">{memberView.team.name}</p>
-        <div className="member-profile-card">
-          <span className="player-profile-avatar">
-            {memberView.player.name.slice(0, 1)}
-          </span>
-          <div>
-            <h1 className="access-title">{memberView.player.name}</h1>
-            <p className="access-description">
-              {memberView.player.jerseyNumber != null
-                ? `#${memberView.player.jerseyNumber} · `
-                : ''}
-              {memberView.player.birthYear}년생
-            </p>
-          </div>
-        </div>
-        <section className="member-stats-section">
-          <div className="flex items-end justify-between">
-            <div>
-              <h2 className="text-lg font-extrabold">내 선수 스탯</h2>
-              <p className="text-sm text-ink-muted">
-                팀 관리자가 기록한 평가입니다.
-              </p>
-            </div>
-            {average !== null && (
-              <div className="member-overall-average">
-                <span>전체 평균</span>
-                <StatGauge score={Math.round(average)} />
-                <strong>{average.toFixed(1)}</strong>
-                <span>/ 5</span>
-              </div>
-            )}
-          </div>
-          {!memberView.evaluation ? (
-            <p className="member-empty-stats">
-              아직 등록된 선수 평가가 없습니다.
-            </p>
-          ) : evaluationQuestions.length === 0 ? (
-            <p className="access-error" role="alert">
-              {error || '평가 항목을 불러오는 중입니다.'}
-            </p>
-          ) : (
-            evaluationQuestions.map((question) => (
-              <div key={question.id} className="member-stat-row">
-                <span>{question.label}</span>
-                {memberView.evaluation?.[question.id] ? (
-                  <div className="member-stat-value">
-                    <StatGauge score={memberView.evaluation[question.id]} />
-                    <strong>
-                      {memberView.evaluation[question.id]}
-                      <small>점</small>
-                    </strong>
-                  </div>
-                ) : (
-                  <strong className="evaluation-result-missing">미평가</strong>
-                )}
-              </div>
-            ))
           )}
         </section>
-        <Button
-          variant="secondary"
-          className="w-full"
-          onClick={() => void clearSavedPlayer()}
-        >
-          로그아웃
-        </Button>
+      </PageFrame>
+    );
+
+  return (
+    <PageFrame>
+      <section className="access-card member-dashboard team-viewer-dashboard">
+        <p className="access-eyebrow">팀 대시보드</p>
+        <h1 className="access-title">{view.team.name}</h1>
+        <p className="access-description">
+          {view.team.homeTown}
+          {view.team.homeGround ? ` · ${view.team.homeGround}` : ''}
+        </p>
+        <div className="viewer-summary">
+          <strong>{view.players.length}명</strong>
+          <span>등록 선수</span>
+          <strong>{view.tactics.length}개</strong>
+          <span>공유 전술</span>
+        </div>
+        <section className="member-stats-section">
+          <h2 className="text-lg font-extrabold">선수단 기록</h2>
+          <TextInput
+            label="선수 검색"
+            name="viewer-player-search"
+            type="search"
+            placeholder="이름, 등번호, 포지션 검색"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          {visiblePlayers.map((player) => {
+            const entries = Object.entries(player.evaluation ?? {});
+            const average = entries.length
+              ? entries.reduce((sum, [, score]) => sum + score, 0) /
+                entries.length
+              : null;
+            return (
+              <article className="viewer-player-card" key={player.id}>
+                <div className="viewer-player-heading">
+                  <div>
+                    <strong>{player.name}</strong>
+                    <span>
+                      {player.jerseyNumber == null
+                        ? ''
+                        : `#${player.jerseyNumber} · `}
+                      {player.birthYear}년생 ·{' '}
+                      {player.preferredPositions.join(' · ')}
+                    </span>
+                  </div>
+                  <span>
+                    {average === null ? '미평가' : `평균 ${average.toFixed(1)}`}
+                  </span>
+                </div>
+                {entries.length > 0 && (
+                  <div className="viewer-stat-chips">
+                    {entries.map(([id, score]) => (
+                      <span key={id}>
+                        {questions.find((question) => question.id === id)
+                          ?.label ?? id}{' '}
+                        {score}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {visiblePlayers.length === 0 && (
+            <p className="member-empty-stats">검색 결과가 없습니다.</p>
+          )}
+        </section>
+        <section className="member-stats-section">
+          <h2 className="text-lg font-extrabold">감독이 공유한 전술</h2>
+          {view.tactics.length ? (
+            view.tactics.map((tactic) => {
+              const lineups = Array.isArray(tactic.data['lineups'])
+                ? tactic.data['lineups'].filter(
+                    (
+                      item,
+                    ): item is {
+                      formationId: string;
+                      slots: Array<{
+                        playerId: string | null;
+                        position: string;
+                      }>;
+                    } =>
+                      typeof item === 'object' &&
+                      item !== null &&
+                      'formationId' in item &&
+                      typeof item.formationId === 'string' &&
+                      'slots' in item &&
+                      Array.isArray(item.slots),
+                  )
+                : [];
+              return (
+                <article className="viewer-player-card" key={tactic.id}>
+                  <div className="viewer-player-heading">
+                    <strong>{tactic.name}</strong>
+                    <span>
+                      {new Date(tactic.updatedAt).toLocaleDateString('ko-KR')}
+                    </span>
+                  </div>
+                  {lineups.map((quarter, index) => (
+                    <div
+                      className="viewer-tactic-quarter"
+                      key={`${tactic.id}-${index}`}
+                    >
+                      <strong>
+                        {index + 1}쿼터 · {quarter.formationId}
+                      </strong>
+                      <span>
+                        {quarter.slots
+                          .map((slot) => {
+                            const player = view.players.find(
+                              ({ id }) => id === slot.playerId,
+                            );
+                            return player
+                              ? `${slot.position} ${player.name}`
+                              : null;
+                          })
+                          .filter(Boolean)
+                          .join(' · ') || '배치 선수가 없습니다.'}
+                      </span>
+                    </div>
+                  ))}
+                </article>
+              );
+            })
+          ) : (
+            <p className="member-empty-stats">아직 공유된 전술이 없습니다.</p>
+          )}
+        </section>
       </section>
     </PageFrame>
   );

@@ -12,6 +12,7 @@ import { PositionEntity } from '../positions/position.entity';
 import { TeamPlayerPositionEntity } from '../players/team-player-position.entity';
 import { TeamPlayerEntity } from '../players/team-player.entity';
 import { TeamEntity } from './team.entity';
+import { TeamTacticEntity } from './team-tactic.entity';
 
 @Injectable()
 export class TeamsService {
@@ -26,6 +27,8 @@ export class TeamsService {
     private readonly playerPositions: Repository<TeamPlayerPositionEntity>,
     @InjectRepository(PlayerEvaluationEntity)
     private readonly evaluations: Repository<PlayerEvaluationEntity>,
+    @InjectRepository(TeamTacticEntity)
+    private readonly tactics: Repository<TeamTacticEntity>,
   ) {}
 
   async listForOwner(ownerUserId: string) {
@@ -85,6 +88,108 @@ export class TeamsService {
     return this.teams.save(team);
   }
 
+  async regenerateInviteCode(ownerUserId: string, teamId: string) {
+    const team = await this.findOwnedTeam(ownerUserId, teamId);
+    team.inviteCode = this.newInviteCode();
+    await this.teams.save(team);
+    return { inviteCode: team.inviteCode };
+  }
+
+  async joinWithInviteCode(inviteCode: string) {
+    const team = await this.teams.findOneBy({ inviteCode });
+    if (!team) throw new NotFoundException('초대 코드를 확인해 주세요.');
+    return { team: { id: team.id, name: team.name } };
+  }
+
+  async getTeamViewerView(teamId: string) {
+    const team = await this.teams.findOneBy({ id: teamId });
+    if (!team) throw new NotFoundException('팀을 찾을 수 없습니다.');
+    const players = await this.players.find({
+      where: { teamId },
+      relations: { positionLinks: { position: true } },
+      order: { name: 'ASC' },
+    });
+    const playerIds = players.map(({ id }) => id);
+    const [evaluations, tactics] = await Promise.all([
+      playerIds.length
+        ? this.evaluations.find({
+            where: playerIds.map((playerId) => ({ playerId })),
+          })
+        : Promise.resolve([]),
+      this.tactics.find({
+        where: { teamId, isShared: true },
+        order: { updatedAt: 'DESC' },
+      }),
+    ]);
+    const evaluationsByPlayer = new Map(
+      evaluations.map(({ playerId, scores }) => [playerId, scores]),
+    );
+    return {
+      team: {
+        id: team.id,
+        name: team.name,
+        homeTown: team.homeTown,
+        homeGround: team.homeGround,
+        description: team.description,
+      },
+      players: players.map((player) => ({
+        ...this.toPlayerResponse(player),
+        evaluation: evaluationsByPlayer.get(player.id) ?? null,
+      })),
+      tactics: tactics.map(({ id, name, data, updatedAt }) => ({
+        id,
+        name,
+        data,
+        updatedAt,
+      })),
+    };
+  }
+
+  async listTactics(ownerUserId: string, teamId: string) {
+    await this.findOwnedTeam(ownerUserId, teamId);
+    return this.tactics.find({
+      where: { teamId },
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
+  async saveTactic(
+    ownerUserId: string,
+    teamId: string,
+    name: string,
+    data: Record<string, unknown>,
+  ) {
+    await this.findOwnedTeam(ownerUserId, teamId);
+    return this.tactics.save(
+      this.tactics.create({ teamId, name: name.trim(), data, isShared: false }),
+    );
+  }
+
+  async updateTactic(
+    ownerUserId: string,
+    teamId: string,
+    tacticId: string,
+    input: {
+      name?: string;
+      data?: Record<string, unknown>;
+      isShared?: boolean;
+    },
+  ) {
+    await this.findOwnedTeam(ownerUserId, teamId);
+    const tactic = await this.tactics.findOneBy({ id: tacticId, teamId });
+    if (!tactic) throw new NotFoundException('저장된 전술을 찾을 수 없습니다.');
+    if (input.name !== undefined) tactic.name = input.name.trim();
+    if (input.data !== undefined) tactic.data = input.data;
+    if (input.isShared !== undefined) tactic.isShared = input.isShared;
+    return this.tactics.save(tactic);
+  }
+
+  async deleteTactic(ownerUserId: string, teamId: string, tacticId: string) {
+    await this.findOwnedTeam(ownerUserId, teamId);
+    await this.tactics.delete({ id: tacticId, teamId });
+    return { success: true };
+  }
+
   async createPlayer(ownerUserId: string, teamId: string, input: PlayerInput) {
     await this.findOwnedTeam(ownerUserId, teamId);
     await this.validatePlayerInput(input, undefined, teamId);
@@ -140,54 +245,6 @@ export class TeamsService {
     await this.players.remove(player);
     await this.evaluations.delete({ playerId });
     return { success: true };
-  }
-
-  async joinForPlayer(inviteCode: string, jerseyNumber: number) {
-    const team = await this.teams.findOneBy({ inviteCode });
-    if (!team)
-      throw new NotFoundException('초대 코드 또는 등번호를 확인해 주세요.');
-    const player = await this.players.findOne({
-      where: { teamId: team.id, jerseyNumber },
-      relations: { positionLinks: { position: true } },
-    });
-    if (!player)
-      throw new NotFoundException('초대 코드 또는 등번호를 확인해 주세요.');
-    const evaluation = await this.evaluations.findOneBy({
-      playerId: player.id,
-    });
-    return {
-      team: {
-        id: team.id,
-        name: team.name,
-        homeTown: team.homeTown,
-        homeGround: team.homeGround,
-        description: team.description,
-      },
-      player: this.toPlayerResponse(player),
-      evaluation: evaluation?.scores ?? null,
-    };
-  }
-
-  async getPlayerView(playerId: string) {
-    const player = await this.players.findOne({
-      where: { id: playerId },
-      relations: { positionLinks: { position: true } },
-    });
-    if (!player) throw new NotFoundException('선수 정보를 찾을 수 없습니다.');
-    const team = await this.teams.findOneBy({ id: player.teamId });
-    if (!team) throw new NotFoundException('팀 정보를 찾을 수 없습니다.');
-    const evaluation = await this.evaluations.findOneBy({ playerId });
-    return {
-      team: {
-        id: team.id,
-        name: team.name,
-        homeTown: team.homeTown,
-        homeGround: team.homeGround,
-        description: team.description,
-      },
-      player: this.toPlayerResponse(player),
-      evaluation: evaluation?.scores ?? null,
-    };
   }
 
   private async getPlayer(playerId: string, teamId: string) {

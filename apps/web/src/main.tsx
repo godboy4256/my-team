@@ -15,8 +15,10 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/teams" element={<App />} />
         <Route path="/teams/new" element={<App />} />
         <Route path="/join" element={<App />} />
+        <Route path="/join/:inviteCode" element={<App />} />
         <Route path="/my-stats" element={<App />} />
         <Route path="/team-info" element={<App />} />
+        <Route path="/clubhouse" element={<App />} />
         <Route path="/board" element={<App />} />
         <Route path="/team" element={<App />} />
         <Route path="/stats" element={<App />} />
